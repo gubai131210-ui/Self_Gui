@@ -9,6 +9,14 @@
 class PortGraphicsItem;
 class CanvasScene;
 
+enum class NodeRunVisualStatus {
+    Idle,
+    Running,
+    Success,
+    Failed,
+    Disabled
+};
+
 class NodeGraphicsItem : public QGraphicsObject
 {
     Q_OBJECT
@@ -22,6 +30,8 @@ public:
     QString nodeId() const { return m_model.id; }
     NodeModel model() const { return m_model; }
     void setModel(const NodeModel &model);
+    void setRunStatus(NodeRunVisualStatus status);
+    NodeRunVisualStatus runStatus() const { return m_runStatus; }
     PortGraphicsItem *portItem(const QString &portId) const;
     QPointF portScenePos(const QString &portId) const;
 
@@ -46,6 +56,7 @@ private:
     QHash<QString, PortGraphicsItem *> m_ports;
     QPointF m_pressScenePos;
     bool m_moving{false};
+    NodeRunVisualStatus m_runStatus{NodeRunVisualStatus::Idle};
 };
 
 #endif // NODEGRAPHICSITEM_H

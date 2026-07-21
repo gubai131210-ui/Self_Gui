@@ -8,7 +8,7 @@
 class DocumentSerializer
 {
 public:
-    static constexpr int CurrentVersion = 1;
+    static constexpr int CurrentVersion = 3;
     static constexpr const char *FormatName = "selt-document";
 
     static bool saveToFile(const Document &document, const QString &filePath, QString *errorMessage = nullptr);

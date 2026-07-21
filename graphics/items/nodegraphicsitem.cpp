@@ -32,6 +32,14 @@ void NodeGraphicsItem::setModel(const NodeModel &model)
     update();
 }
 
+void NodeGraphicsItem::setRunStatus(NodeRunVisualStatus status)
+{
+    if (m_runStatus == status)
+        return;
+    m_runStatus = status;
+    update();
+}
+
 PortGraphicsItem *NodeGraphicsItem::portItem(const QString &portId) const
 {
     return m_ports.value(portId, nullptr);
@@ -63,6 +71,23 @@ void NodeGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *
     painter->setRenderHint(QPainter::Antialiasing, true);
 
     QPen pen(m_model.style.borderColor, m_model.style.borderWidth);
+    switch (m_runStatus) {
+    case NodeRunVisualStatus::Running:
+        pen = QPen(QColor(30, 144, 255), m_model.style.borderWidth + 1.0);
+        break;
+    case NodeRunVisualStatus::Success:
+        pen = QPen(QColor(46, 180, 80), m_model.style.borderWidth + 1.0);
+        break;
+    case NodeRunVisualStatus::Failed:
+        pen = QPen(QColor(220, 50, 50), m_model.style.borderWidth + 1.5);
+        break;
+    case NodeRunVisualStatus::Disabled:
+        pen = QPen(QColor(140, 140, 140), m_model.style.borderWidth, Qt::DotLine);
+        break;
+    case NodeRunVisualStatus::Idle:
+    default:
+        break;
+    }
     if (option->state & QStyle::State_Selected)
         pen = QPen(QColor(255, 140, 0), m_model.style.borderWidth + 1.0, Qt::DashLine);
 
@@ -77,6 +102,41 @@ void NodeGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *
     painter->drawText(QRectF(8, 8, m_model.size.width() - 16, m_model.size.height() - 16),
                       Qt::AlignCenter | Qt::TextWordWrap,
                       m_model.text);
+
+    if (m_runStatus != NodeRunVisualStatus::Idle) {
+        QColor badge(120, 120, 120);
+        QString badgeText = QStringLiteral("Idle");
+        switch (m_runStatus) {
+        case NodeRunVisualStatus::Running:
+            badge = QColor(30, 144, 255);
+            badgeText = QStringLiteral("Run");
+            break;
+        case NodeRunVisualStatus::Success:
+            badge = QColor(46, 180, 80);
+            badgeText = QStringLiteral("OK");
+            break;
+        case NodeRunVisualStatus::Failed:
+            badge = QColor(220, 50, 50);
+            badgeText = QStringLiteral("ERR");
+            break;
+        case NodeRunVisualStatus::Disabled:
+            badge = QColor(140, 140, 140);
+            badgeText = QStringLiteral("OFF");
+            break;
+        default:
+            break;
+        }
+        const QRectF badgeRect(m_model.size.width() - 34, 4, 30, 14);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(badge);
+        painter->drawRoundedRect(badgeRect, 3, 3);
+        QFont badgeFont = font;
+        badgeFont.setPointSize(7);
+        badgeFont.setBold(true);
+        painter->setFont(badgeFont);
+        painter->setPen(Qt::white);
+        painter->drawText(badgeRect, Qt::AlignCenter, badgeText);
+    }
 }
 
 QVariant NodeGraphicsItem::itemChange(GraphicsItemChange change, const QVariant &value)

@@ -3,17 +3,20 @@
 
 #include "core/model/nodemodel.h"
 
+#include <QHash>
 #include <QWidget>
+
+#ifndef SELT_HAS_OPENCV
+#define SELT_HAS_OPENCV 0
+#endif
 
 class Document;
 class QUndoStack;
 class QLineEdit;
-class QPlainTextEdit;
-class QDoubleSpinBox;
-class QSpinBox;
 class QLabel;
+class QFormLayout;
 class QCheckBox;
-class QPushButton;
+class QWidget;
 
 class PropertyPanel : public QWidget
 {
@@ -25,49 +28,60 @@ public:
     void setDocument(Document *document);
     void setUndoStack(QUndoStack *undoStack);
     void setSelectedNode(const QString &nodeId);
+    void setModuleStatusText(const QString &text);
+    void applyRoiParameter(const QString &key, const QJsonObject &roiJson);
+    /// 参数面板自身正在写回 Document 时为 true，避免 nodeUpdated 同步重建导致崩溃
+    bool isApplyingChanges() const { return m_applyingChanges; }
 
 private slots:
     void applyText();
-    void applyNote();
-    void applyUrl();
-    void applyGeometry();
-    void applyStyle();
-    void chooseFillColor();
-    void chooseBorderColor();
-    void chooseTextColor();
-    void applyLocked();
-
-protected:
-    bool eventFilter(QObject *watched, QEvent *event) override;
+    void applyCommon();
+    void applyDynamicParameters();
+    void browseFilePath(const QString &key);
 
 private:
+    class ApplyingGuard {
+    public:
+        explicit ApplyingGuard(PropertyPanel *panel)
+            : m_panel(panel)
+        {
+            if (m_panel)
+                ++m_panel->m_applyingChanges;
+        }
+        ~ApplyingGuard()
+        {
+            if (m_panel && m_panel->m_applyingChanges > 0)
+                --m_panel->m_applyingChanges;
+        }
+    private:
+        PropertyPanel *m_panel{nullptr};
+    };
+
     void rebuildUi();
+    void clearDynamicWidgets();
+    void rebuildDynamicParameters(const NodeModel &node);
     void loadFromNode(const NodeModel &node);
     void blockSignalsRecursive(bool block);
+    void updateRoiInfoLabel(const QString &key, const QJsonObject &roiJson);
     NodeModel currentNode() const;
+    QJsonObject collectDynamicParameters() const;
+    void pushNodeChange(const NodeModel &oldNode, const NodeModel &newNode);
 
     Document *m_document{nullptr};
     QUndoStack *m_undoStack{nullptr};
     QString m_nodeId;
+    int m_applyingChanges{0};
 
     QLabel *m_typeLabel{nullptr};
+    QLabel *m_categoryLabel{nullptr};
+    QLabel *m_descLabel{nullptr};
+    QLabel *m_statusLabel{nullptr};
     QLineEdit *m_textEdit{nullptr};
-    QPlainTextEdit *m_noteEdit{nullptr};
-    QLineEdit *m_urlEdit{nullptr};
-    QDoubleSpinBox *m_xSpin{nullptr};
-    QDoubleSpinBox *m_ySpin{nullptr};
-    QDoubleSpinBox *m_wSpin{nullptr};
-    QDoubleSpinBox *m_hSpin{nullptr};
-    QSpinBox *m_fontSpin{nullptr};
-    QDoubleSpinBox *m_borderSpin{nullptr};
-    QDoubleSpinBox *m_radiusSpin{nullptr};
-    QPushButton *m_fillBtn{nullptr};
-    QPushButton *m_borderBtn{nullptr};
-    QPushButton *m_textColorBtn{nullptr};
     QCheckBox *m_lockedCheck{nullptr};
-    QColor m_fillColor;
-    QColor m_borderColor;
-    QColor m_textColor;
+    QWidget *m_commonWidget{nullptr};
+    QWidget *m_dynamicWidget{nullptr};
+    QFormLayout *m_dynamicForm{nullptr};
+    QHash<QString, QWidget *> m_paramWidgets;
 };
 
 #endif // PROPERTYPANEL_H

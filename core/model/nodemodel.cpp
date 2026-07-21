@@ -39,6 +39,8 @@ QJsonObject NodeModel::toJson() const
     obj.insert(QStringLiteral("locked"), locked);
     obj.insert(QStringLiteral("zValue"), zValue);
     obj.insert(QStringLiteral("groupId"), groupId);
+    if (!parameters.isEmpty())
+        obj.insert(QStringLiteral("parameters"), parameters);
 
     QJsonArray portsArray;
     for (const PortModel &port : ports)
@@ -64,6 +66,7 @@ NodeModel NodeModel::fromJson(const QJsonObject &obj)
     node.locked = obj.value(QStringLiteral("locked")).toBool(false);
     node.zValue = obj.value(QStringLiteral("zValue")).toInt(0);
     node.groupId = obj.value(QStringLiteral("groupId")).toString();
+    node.parameters = obj.value(QStringLiteral("parameters")).toObject();
 
     const QJsonArray portsArray = obj.value(QStringLiteral("ports")).toArray();
     if (portsArray.isEmpty()) {

@@ -26,6 +26,7 @@ struct NodeModel
     bool locked{false};
     int zValue{0};
     QString groupId;
+    QJsonObject parameters;
 
     QJsonObject toJson() const;
     static NodeModel fromJson(const QJsonObject &obj);

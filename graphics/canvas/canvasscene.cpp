@@ -1,8 +1,11 @@
 #include "canvasscene.h"
 
+#include "app/nodebuilder.h"
 #include "core/command/documentcommands.h"
 #include "core/model/document.h"
-#include "core/registry/nodefactory.h"
+#if SELT_HAS_OPENCV
+#include "vision/registry/visionnoderegistry.h"
+#endif
 #include "graphics/items/connectiongraphicsitem.h"
 #include "graphics/items/nodegraphicsitem.h"
 #include "graphics/items/portgraphicsitem.h"
@@ -60,7 +63,7 @@ void CanvasScene::createNodeAt(const QString &type, const QPointF &scenePos)
 {
     if (!m_document || !m_undoStack)
         return;
-    NodeModel node = NodeFactory::create(type, snapPoint(scenePos));
+    NodeModel node = NodeBuilder::create(type, snapPoint(scenePos));
     m_undoStack->push(new AddNodeCommand(m_document, node));
 }
 
@@ -523,12 +526,19 @@ void CanvasScene::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 void CanvasScene::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
 {
     QMenu menu;
-    QMenu *createMenu = menu.addMenu(QStringLiteral("创建节点"));
-    for (const QString &type : NodeFactory::supportedTypes()) {
-        createMenu->addAction(NodeFactory::displayName(type), this, [this, type, pos = event->scenePos()]() {
-            createNodeAt(type, pos);
-        });
+    QMenu *createMenu = menu.addMenu(QStringLiteral("创建视觉模块"));
+#if SELT_HAS_OPENCV
+    for (const QString &category : VisionNodeRegistry::categories()) {
+        QMenu *catMenu = createMenu->addMenu(category);
+        for (const QString &type : VisionNodeRegistry::typesInCategory(category)) {
+            catMenu->addAction(NodeBuilder::displayName(type), this, [this, type, pos = event->scenePos()]() {
+                createNodeAt(type, pos);
+            });
+        }
     }
+#else
+    createMenu->addAction(QStringLiteral("OpenCV 未启用"))->setEnabled(false);
+#endif
     menu.addSeparator();
     menu.addAction(QStringLiteral("删除"), this, [this]() { deleteSelection(); });
     menu.addAction(QStringLiteral("复制"), this, [this]() { copySelection(); });

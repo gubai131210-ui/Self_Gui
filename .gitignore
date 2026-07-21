@@ -33,3 +33,6 @@ autosave.selt.tmp
 .idea/
 .DS_Store
 Thumbs.db
+
+# Third-party reference trees (keep local only)
+XVision-develop/
