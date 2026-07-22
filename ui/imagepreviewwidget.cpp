@@ -11,10 +11,12 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPair>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSizePolicy>
+#include <QStringList>
 #include <QStyle>
 #include <QWheelEvent>
 #include <QtMath>
@@ -22,6 +24,17 @@
 
 namespace {
 constexpr qreal kHandleSize = 8.0;
+
+double distanceToSegment(const QPointF &point, const QPointF &start, const QPointF &end)
+{
+    const QPointF direction = end - start;
+    const double lengthSquared = QPointF::dotProduct(direction, direction);
+    if (lengthSquared <= 1e-12)
+        return QLineF(point, start).length();
+    const double projection = QPointF::dotProduct(point - start, direction) / lengthSquared;
+    const double t = qBound(0.0, projection, 1.0);
+    return QLineF(point, start + direction * t).length();
+}
 
 QString imageFormatName(QImage::Format format)
 {
@@ -378,13 +391,18 @@ void ImageCanvasWidget::paintEvent(QPaintEvent *)
     if (m_image.isNull()) {
         painter.setPen(QColor(160, 160, 160));
         painter.drawText(rect(), Qt::AlignCenter,
-                         QStringLiteral("暂无图像\nCtrl+拖拽绘制ROI\n多边形：Ctrl+点击加点，双击结束"));
+                         QStringLiteral("暂无图像\n拖拽绘制ROI\n多边形：Ctrl+点击加点，双击结束"));
         return;
     }
 
     const QRectF disp = imageDisplayRect();
-    painter.drawImage(disp, m_image);
+    // Zoom-in: nearest-neighbor keeps edges crisp; zoom-out: smooth reduces aliasing.
+    const Qt::TransformationMode mode =
+        (m_scale >= 1.0) ? Qt::FastTransformation : Qt::SmoothTransformation;
+    const QImage drawn = m_image.scaled(disp.size().toSize(), Qt::IgnoreAspectRatio, mode);
+    painter.drawImage(disp.topLeft(), drawn);
     painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
 
     for (const OverlayItem &item : m_overlays) {
         if (!m_overlayTypeFilter.isEmpty()
@@ -411,8 +429,490 @@ void ImageCanvasWidget::paintEvent(QPaintEvent *)
         }
     }
 
-    drawRoiShape(painter);
-    drawHandles(painter);
+    drawInteractiveGeometry(painter);
+    if (!m_hideRoiOverlay) {
+        drawRoiShape(painter);
+        drawHandles(painter);
+    }
+}
+
+void ImageCanvasWidget::setRoiOverlayHidden(bool hidden)
+{
+    if (m_hideRoiOverlay == hidden)
+        return;
+    m_hideRoiOverlay = hidden;
+    update();
+}
+
+void ImageCanvasWidget::setInteractiveGeometry(const Selt::InteractiveGeometrySpec &spec,
+                                               const QJsonObject &parameters)
+{
+    m_geometrySpec = spec;
+    m_geometryParameters = parameters;
+    m_geometryHandle = -1;
+    update();
+}
+
+void ImageCanvasWidget::clearInteractiveGeometry()
+{
+    m_geometrySpec = {};
+    m_geometryParameters = {};
+    m_geometryHandle = -1;
+    update();
+}
+
+void ImageCanvasWidget::drawInteractiveGeometry(QPainter &painter) const
+{
+    if (!m_geometrySpec.editable
+        || m_geometrySpec.kind == Selt::GeometryKind::None
+        || m_geometrySpec.kind == Selt::GeometryKind::NotApplicable
+        || m_geometrySpec.kind == Selt::GeometryKind::Roi
+        || m_geometrySpec.kind == Selt::GeometryKind::TemplateRoi)
+        return;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor geometryColor(40, 190, 255);
+    const QColor handleColor(255, 210, 80);
+    painter.setPen(QPen(geometryColor, 2.0));
+    painter.setBrush(Qt::NoBrush);
+
+    auto point = [this](double x, double y) { return imageToWidget(QPointF(x, y)); };
+    auto drawHandle = [&painter](const QPointF &pos, const QColor &color) {
+        painter.setPen(QPen(color, 1.5));
+        painter.setBrush(color);
+        painter.drawEllipse(pos, 5.0, 5.0);
+        painter.setBrush(Qt::NoBrush);
+    };
+
+    if (m_geometrySpec.kind == Selt::GeometryKind::Point) {
+        const QString xKey = m_geometryParameters.contains(QStringLiteral("refX"))
+            ? QStringLiteral("refX")
+            : QStringLiteral("x");
+        const QString yKey = m_geometryParameters.contains(QStringLiteral("refY"))
+            ? QStringLiteral("refY")
+            : QStringLiteral("y");
+        if (m_geometryParameters.contains(xKey) && m_geometryParameters.contains(yKey)) {
+            const QPointF p = point(m_geometryParameters.value(xKey).toDouble(),
+                                    m_geometryParameters.value(yKey).toDouble());
+            painter.drawLine(p + QPointF(-8, 0), p + QPointF(8, 0));
+            painter.drawLine(p + QPointF(0, -8), p + QPointF(0, 8));
+            drawHandle(p, handleColor);
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::TwoPoint) {
+        const bool useRef = m_geometryParameters.contains(QStringLiteral("refX"));
+        const QString ax = useRef ? QStringLiteral("refX") : QStringLiteral("x1");
+        const QString ay = useRef ? QStringLiteral("refY") : QStringLiteral("y1");
+        const QString bx = useRef ? QStringLiteral("x") : QStringLiteral("x2");
+        const QString by = useRef ? QStringLiteral("y") : QStringLiteral("y2");
+        if (m_geometryParameters.contains(ax) && m_geometryParameters.contains(ay)) {
+            const QPointF p0 = point(m_geometryParameters.value(ax).toDouble(),
+                                     m_geometryParameters.value(ay).toDouble());
+            drawHandle(p0, handleColor);
+            if (m_geometryParameters.contains(bx) && m_geometryParameters.contains(by)) {
+                const QPointF p1 = point(m_geometryParameters.value(bx).toDouble(),
+                                         m_geometryParameters.value(by).toDouble());
+                painter.drawLine(p0, p1);
+                drawHandle(p1, handleColor);
+            }
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::TwoLineSegment) {
+        auto drawSeg = [&](const QString &x0, const QString &y0,
+                           const QString &x1, const QString &y1) {
+            if (!m_geometryParameters.contains(x0) || !m_geometryParameters.contains(y0)
+                || !m_geometryParameters.contains(x1) || !m_geometryParameters.contains(y1))
+                return;
+            const QPointF p0 = point(m_geometryParameters.value(x0).toDouble(),
+                                     m_geometryParameters.value(y0).toDouble());
+            const QPointF p1 = point(m_geometryParameters.value(x1).toDouble(),
+                                     m_geometryParameters.value(y1).toDouble());
+            painter.drawLine(p0, p1);
+            drawHandle(p0, handleColor);
+            drawHandle(p1, handleColor);
+        };
+        drawSeg(QStringLiteral("x1"), QStringLiteral("y1"),
+                QStringLiteral("x2"), QStringLiteral("y2"));
+        drawSeg(QStringLiteral("x3"), QStringLiteral("y3"),
+                QStringLiteral("x4"), QStringLiteral("y4"));
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::ContourPick) {
+        if (m_geometryParameters.contains(QStringLiteral("pickX"))
+            && m_geometryParameters.contains(QStringLiteral("pickY"))) {
+            const QPointF p = point(m_geometryParameters.value(QStringLiteral("pickX")).toDouble(),
+                                    m_geometryParameters.value(QStringLiteral("pickY")).toDouble());
+            painter.setPen(QPen(QColor(255, 120, 40), 2.0));
+            painter.drawEllipse(p, 10.0, 10.0);
+            drawHandle(p, handleColor);
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::LineSegment) {
+        const double x0 = m_geometryParameters.value(QStringLiteral("x0")).toDouble();
+        const double y0 = m_geometryParameters.value(QStringLiteral("y0")).toDouble();
+        const double x1 = m_geometryParameters.value(QStringLiteral("x1")).toDouble();
+        const double y1 = m_geometryParameters.value(QStringLiteral("y1")).toDouble();
+        const QPointF p0 = point(x0, y0);
+        const QPointF p1 = point(x1, y1);
+        painter.drawLine(p0, p1);
+        drawHandle(p0, handleColor);
+        drawHandle(p1, handleColor);
+
+        // Preview caliper search strips along the expected segment.
+        const int numCalipers = qMax(2, m_geometryParameters.value(QStringLiteral("numCalipers")).toInt(8));
+        double searchLen = m_geometryParameters.value(QStringLiteral("searchLength")).toDouble();
+        if (!(searchLen > 1.0))
+            searchLen = 60.0;
+        double projLen = m_geometryParameters.value(QStringLiteral("projectionLength")).toDouble();
+        if (!(projLen > 0.5))
+            projLen = 10.0;
+        const QPointF dir = QPointF(x1 - x0, y1 - y0);
+        const double len = std::hypot(dir.x(), dir.y());
+        if (len > 1e-6) {
+            const QPointF axis = dir / len;
+            const QPointF normal(-axis.y(), axis.x());
+            painter.setPen(QPen(QColor(255, 200, 80, 180), 1.0));
+            for (int i = 0; i < numCalipers; ++i) {
+                const double t = (i + 0.5) / double(numCalipers);
+                const QPointF c(x0 + t * dir.x(), y0 + t * dir.y());
+                const QVector<QPointF> corners = {
+                    c - normal * (searchLen * 0.5) - axis * (projLen * 0.5),
+                    c + normal * (searchLen * 0.5) - axis * (projLen * 0.5),
+                    c + normal * (searchLen * 0.5) + axis * (projLen * 0.5),
+                    c - normal * (searchLen * 0.5) + axis * (projLen * 0.5)};
+                QPolygonF poly;
+                for (const QPointF &corner : corners)
+                    poly.append(imageToWidget(corner));
+                painter.drawPolygon(poly);
+            }
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::Circle) {
+        const double cx = m_geometryParameters.value(QStringLiteral("cx")).toDouble();
+        const double cy = m_geometryParameters.value(QStringLiteral("cy")).toDouble();
+        const double radius = m_geometryParameters.value(QStringLiteral("radius")).toDouble();
+        const QPointF center = point(cx, cy);
+        painter.drawEllipse(center, radius * m_scale, radius * m_scale);
+        drawHandle(center, handleColor);
+        drawHandle(imageToWidget(QPointF(cx + radius, cy)), handleColor);
+
+        const int numCalipers = qMax(3, m_geometryParameters.value(QStringLiteral("numCalipers")).toInt(12));
+        double searchLen = m_geometryParameters.value(QStringLiteral("searchLength")).toDouble();
+        if (!(searchLen > 1.0))
+            searchLen = qMax(12.0, radius * 0.45);
+        double projLen = m_geometryParameters.value(QStringLiteral("projectionLength")).toDouble();
+        if (!(projLen > 0.5))
+            projLen = qBound(3.0, radius * 0.08, 24.0);
+        const bool inward = m_geometryParameters.value(QStringLiteral("searchInward")).toBool(true);
+        painter.setPen(QPen(QColor(255, 200, 80, 180), 1.0));
+        for (int i = 0; i < numCalipers; ++i) {
+            const double angDeg = (360.0 * i) / double(numCalipers);
+            const double angRad = qDegreesToRadians(angDeg);
+            const QPointF c(cx + radius * std::cos(angRad), cy + radius * std::sin(angRad));
+            const double searchAng = inward ? (angDeg + 180.0) : angDeg;
+            const double sRad = qDegreesToRadians(searchAng);
+            const QPointF axis(std::cos(sRad), std::sin(sRad));
+            const QPointF normal(-axis.y(), axis.x());
+            const QVector<QPointF> corners = {
+                c - axis * (searchLen * 0.5) - normal * (projLen * 0.5),
+                c + axis * (searchLen * 0.5) - normal * (projLen * 0.5),
+                c + axis * (searchLen * 0.5) + normal * (projLen * 0.5),
+                c - axis * (searchLen * 0.5) + normal * (projLen * 0.5)};
+            QPolygonF poly;
+            for (const QPointF &corner : corners)
+                poly.append(imageToWidget(corner));
+            painter.drawPolygon(poly);
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::CaliperStrip) {
+        const double cx = m_geometryParameters.value(QStringLiteral("cx")).toDouble();
+        const double cy = m_geometryParameters.value(QStringLiteral("cy")).toDouble();
+        const double angle = qDegreesToRadians(
+            m_geometryParameters.value(QStringLiteral("angle")).toDouble());
+        const double length = qMax(2.0, m_geometryParameters.value(QStringLiteral("length")).toDouble());
+        const double width = qMax(1.0, m_geometryParameters.value(QStringLiteral("width")).toDouble());
+        const QPointF center(cx, cy);
+        const QPointF axis(std::cos(angle), std::sin(angle));
+        const QPointF normal(-axis.y(), axis.x());
+        const QVector<QPointF> corners = {
+            center - axis * (length * 0.5) - normal * (width * 0.5),
+            center + axis * (length * 0.5) - normal * (width * 0.5),
+            center + axis * (length * 0.5) + normal * (width * 0.5),
+            center - axis * (length * 0.5) + normal * (width * 0.5)};
+        QPolygonF polygon;
+        for (const QPointF &corner : corners)
+            polygon.append(imageToWidget(corner));
+        painter.drawPolygon(polygon);
+        drawHandle(imageToWidget(center), handleColor);
+        drawHandle(imageToWidget(center + axis * (length * 0.5)), handleColor);
+        drawHandle(imageToWidget(center + normal * (width * 0.5)), handleColor);
+    }
+    painter.restore();
+}
+
+bool ImageCanvasWidget::hitInteractiveGeometry(const QPoint &pos)
+{
+    if (!m_geometrySpec.editable || m_image.isNull()
+        || m_geometrySpec.kind == Selt::GeometryKind::Roi
+        || m_geometrySpec.kind == Selt::GeometryKind::TemplateRoi
+        || m_geometrySpec.kind == Selt::GeometryKind::NotApplicable)
+        return false;
+    const QPointF imagePos = widgetToImage(pos);
+    const double threshold = 12.0 / qMax(0.05, m_scale);
+    auto near = [threshold](const QPointF &a, const QPointF &b) {
+        return QLineF(a, b).length() <= threshold;
+    };
+
+    if (m_geometrySpec.kind == Selt::GeometryKind::Point) {
+        const QString xKey = m_geometryParameters.contains(QStringLiteral("refX"))
+            ? QStringLiteral("refX")
+            : QStringLiteral("x");
+        const QString yKey = m_geometryParameters.contains(QStringLiteral("refY"))
+            ? QStringLiteral("refY")
+            : QStringLiteral("y");
+        if (m_geometryParameters.contains(xKey) && m_geometryParameters.contains(yKey)
+            && near(imagePos, QPointF(m_geometryParameters.value(xKey).toDouble(),
+                                      m_geometryParameters.value(yKey).toDouble()))) {
+            m_geometryHandle = 1;
+            return true;
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::TwoPoint) {
+        const bool useRef = m_geometryParameters.contains(QStringLiteral("refX"));
+        const QString ax = useRef ? QStringLiteral("refX") : QStringLiteral("x1");
+        const QString ay = useRef ? QStringLiteral("refY") : QStringLiteral("y1");
+        const QString bx = useRef ? QStringLiteral("x") : QStringLiteral("x2");
+        const QString by = useRef ? QStringLiteral("y") : QStringLiteral("y2");
+        if (m_geometryParameters.contains(ax) && m_geometryParameters.contains(ay)
+            && near(imagePos, QPointF(m_geometryParameters.value(ax).toDouble(),
+                                      m_geometryParameters.value(ay).toDouble()))) {
+            m_geometryHandle = 1;
+            return true;
+        }
+        if (m_geometryParameters.contains(bx) && m_geometryParameters.contains(by)
+            && near(imagePos, QPointF(m_geometryParameters.value(bx).toDouble(),
+                                      m_geometryParameters.value(by).toDouble()))) {
+            m_geometryHandle = 2;
+            return true;
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::TwoLineSegment) {
+        const QVector<QPair<QString, QString>> pts = {
+            {QStringLiteral("x1"), QStringLiteral("y1")},
+            {QStringLiteral("x2"), QStringLiteral("y2")},
+            {QStringLiteral("x3"), QStringLiteral("y3")},
+            {QStringLiteral("x4"), QStringLiteral("y4")}};
+        for (int i = 0; i < pts.size(); ++i) {
+            if (!m_geometryParameters.contains(pts[i].first)
+                || !m_geometryParameters.contains(pts[i].second))
+                continue;
+            if (near(imagePos, QPointF(m_geometryParameters.value(pts[i].first).toDouble(),
+                                       m_geometryParameters.value(pts[i].second).toDouble()))) {
+                m_geometryHandle = i + 1;
+                return true;
+            }
+        }
+        if (m_geometryParameters.contains(QStringLiteral("x1"))
+            && m_geometryParameters.contains(QStringLiteral("y1"))
+            && m_geometryParameters.contains(QStringLiteral("x2"))
+            && m_geometryParameters.contains(QStringLiteral("y2"))
+            && distanceToSegment(imagePos,
+                                 QPointF(m_geometryParameters.value(QStringLiteral("x1")).toDouble(),
+                                         m_geometryParameters.value(QStringLiteral("y1")).toDouble()),
+                                 QPointF(m_geometryParameters.value(QStringLiteral("x2")).toDouble(),
+                                         m_geometryParameters.value(QStringLiteral("y2")).toDouble()))
+                <= threshold) {
+            m_geometryHandle = 10;
+            return true;
+        }
+        if (m_geometryParameters.contains(QStringLiteral("x3"))
+            && m_geometryParameters.contains(QStringLiteral("y3"))
+            && m_geometryParameters.contains(QStringLiteral("x4"))
+            && m_geometryParameters.contains(QStringLiteral("y4"))
+            && distanceToSegment(imagePos,
+                                 QPointF(m_geometryParameters.value(QStringLiteral("x3")).toDouble(),
+                                         m_geometryParameters.value(QStringLiteral("y3")).toDouble()),
+                                 QPointF(m_geometryParameters.value(QStringLiteral("x4")).toDouble(),
+                                         m_geometryParameters.value(QStringLiteral("y4")).toDouble()))
+                <= threshold) {
+            m_geometryHandle = 11;
+            return true;
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::ContourPick) {
+        if (m_geometryParameters.contains(QStringLiteral("pickX"))
+            && m_geometryParameters.contains(QStringLiteral("pickY"))
+            && near(imagePos, QPointF(m_geometryParameters.value(QStringLiteral("pickX")).toDouble(),
+                                      m_geometryParameters.value(QStringLiteral("pickY")).toDouble()))) {
+            m_geometryHandle = 1;
+            return true;
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::LineSegment) {
+        const QPointF p0(m_geometryParameters.value(QStringLiteral("x0")).toDouble(),
+                         m_geometryParameters.value(QStringLiteral("y0")).toDouble());
+        const QPointF p1(m_geometryParameters.value(QStringLiteral("x1")).toDouble(),
+                         m_geometryParameters.value(QStringLiteral("y1")).toDouble());
+        if (near(imagePos, p0)) {
+            m_geometryHandle = 1;
+            return true;
+        }
+        if (near(imagePos, p1)) {
+            m_geometryHandle = 2;
+            return true;
+        }
+        if (distanceToSegment(imagePos, p0, p1) <= threshold) {
+            m_geometryHandle = 0;
+            return true;
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::Circle) {
+        const QPointF center(m_geometryParameters.value(QStringLiteral("cx")).toDouble(),
+                             m_geometryParameters.value(QStringLiteral("cy")).toDouble());
+        const double radius = m_geometryParameters.value(QStringLiteral("radius")).toDouble();
+        if (near(imagePos, center)) {
+            m_geometryHandle = 1;
+            return true;
+        }
+        if (qAbs(QLineF(center, imagePos).length() - radius) <= threshold) {
+            m_geometryHandle = 2;
+            return true;
+        }
+        if (QLineF(center, imagePos).length() <= radius + threshold) {
+            m_geometryHandle = 0;
+            return true;
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::CaliperStrip) {
+        const QPointF center(m_geometryParameters.value(QStringLiteral("cx")).toDouble(),
+                             m_geometryParameters.value(QStringLiteral("cy")).toDouble());
+        const double angle = qDegreesToRadians(
+            m_geometryParameters.value(QStringLiteral("angle")).toDouble());
+        const double length = qMax(2.0, m_geometryParameters.value(QStringLiteral("length")).toDouble());
+        const double width = qMax(1.0, m_geometryParameters.value(QStringLiteral("width")).toDouble());
+        const QPointF axis(std::cos(angle), std::sin(angle));
+        const QPointF normal(-axis.y(), axis.x());
+        if (near(imagePos, center)) {
+            m_geometryHandle = 0;
+            return true;
+        }
+        if (near(imagePos, center + axis * (length * 0.5))) {
+            m_geometryHandle = 1;
+            return true;
+        }
+        if (near(imagePos, center + normal * (width * 0.5))) {
+            m_geometryHandle = 2;
+            return true;
+        }
+    }
+    m_geometryHandle = -1;
+    return false;
+}
+
+void ImageCanvasWidget::updateInteractiveGeometry(const QPoint &pos)
+{
+    if (m_geometryHandle < 0)
+        return;
+    const QPointF current = widgetToImage(pos);
+    const QPointF delta = current - m_geometryStart;
+    if (m_geometrySpec.kind == Selt::GeometryKind::Point) {
+        const QString xKey = m_geometryParameters.contains(QStringLiteral("refX"))
+            ? QStringLiteral("refX")
+            : QStringLiteral("x");
+        const QString yKey = m_geometryParameters.contains(QStringLiteral("refY"))
+            ? QStringLiteral("refY")
+            : QStringLiteral("y");
+        m_geometryParameters.insert(xKey, current.x());
+        m_geometryParameters.insert(yKey, current.y());
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::TwoPoint) {
+        const bool useRef = m_geometryParameters.contains(QStringLiteral("refX"));
+        const QString ax = useRef ? QStringLiteral("refX") : QStringLiteral("x1");
+        const QString ay = useRef ? QStringLiteral("refY") : QStringLiteral("y1");
+        const QString bx = useRef ? QStringLiteral("x") : QStringLiteral("x2");
+        const QString by = useRef ? QStringLiteral("y") : QStringLiteral("y2");
+        if (m_geometryHandle == 1) {
+            m_geometryParameters.insert(ax, current.x());
+            m_geometryParameters.insert(ay, current.y());
+        } else if (m_geometryHandle == 2) {
+            m_geometryParameters.insert(bx, current.x());
+            m_geometryParameters.insert(by, current.y());
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::TwoLineSegment) {
+        if (m_geometryHandle >= 1 && m_geometryHandle <= 4) {
+            const QVector<QPair<QString, QString>> pts = {
+                {QStringLiteral("x1"), QStringLiteral("y1")},
+                {QStringLiteral("x2"), QStringLiteral("y2")},
+                {QStringLiteral("x3"), QStringLiteral("y3")},
+                {QStringLiteral("x4"), QStringLiteral("y4")}};
+            const auto &keys = pts[m_geometryHandle - 1];
+            m_geometryParameters.insert(keys.first, current.x());
+            m_geometryParameters.insert(keys.second, current.y());
+        } else if (m_geometryHandle == 10 || m_geometryHandle == 11) {
+            const QStringList keys = (m_geometryHandle == 10)
+                ? QStringList{QStringLiteral("x1"), QStringLiteral("y1"),
+                              QStringLiteral("x2"), QStringLiteral("y2")}
+                : QStringList{QStringLiteral("x3"), QStringLiteral("y3"),
+                              QStringLiteral("x4"), QStringLiteral("y4")};
+            for (int i = 0; i < 4; i += 2) {
+                m_geometryParameters.insert(keys[i],
+                    m_geometryParameters.value(keys[i]).toDouble() + delta.x());
+                m_geometryParameters.insert(keys[i + 1],
+                    m_geometryParameters.value(keys[i + 1]).toDouble() + delta.y());
+            }
+        }
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::ContourPick) {
+        m_geometryParameters.insert(QStringLiteral("pickX"), current.x());
+        m_geometryParameters.insert(QStringLiteral("pickY"), current.y());
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::LineSegment) {
+        double x0 = m_geometryParameters.value(QStringLiteral("x0")).toDouble();
+        double y0 = m_geometryParameters.value(QStringLiteral("y0")).toDouble();
+        double x1 = m_geometryParameters.value(QStringLiteral("x1")).toDouble();
+        double y1 = m_geometryParameters.value(QStringLiteral("y1")).toDouble();
+        if (m_geometryHandle == 1) {
+            x0 = current.x();
+            y0 = current.y();
+        } else if (m_geometryHandle == 2) {
+            x1 = current.x();
+            y1 = current.y();
+        } else {
+            x0 += delta.x();
+            y0 += delta.y();
+            x1 += delta.x();
+            y1 += delta.y();
+        }
+        m_geometryParameters.insert(QStringLiteral("x0"), x0);
+        m_geometryParameters.insert(QStringLiteral("y0"), y0);
+        m_geometryParameters.insert(QStringLiteral("x1"), x1);
+        m_geometryParameters.insert(QStringLiteral("y1"), y1);
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::Circle) {
+        double cx = m_geometryParameters.value(QStringLiteral("cx")).toDouble();
+        double cy = m_geometryParameters.value(QStringLiteral("cy")).toDouble();
+        double radius = m_geometryParameters.value(QStringLiteral("radius")).toDouble();
+        if (m_geometryHandle == 1) {
+            cx = current.x();
+            cy = current.y();
+        } else if (m_geometryHandle == 2) {
+            radius = qMax(2.0, QLineF(QPointF(cx, cy), current).length());
+        } else {
+            cx += delta.x();
+            cy += delta.y();
+        }
+        m_geometryParameters.insert(QStringLiteral("cx"), cx);
+        m_geometryParameters.insert(QStringLiteral("cy"), cy);
+        m_geometryParameters.insert(QStringLiteral("radius"), radius);
+    } else if (m_geometrySpec.kind == Selt::GeometryKind::CaliperStrip) {
+        double cx = m_geometryParameters.value(QStringLiteral("cx")).toDouble();
+        double cy = m_geometryParameters.value(QStringLiteral("cy")).toDouble();
+        const double angle = qDegreesToRadians(
+            m_geometryParameters.value(QStringLiteral("angle")).toDouble());
+        const QPointF axis(std::cos(angle), std::sin(angle));
+        const QPointF normal(-axis.y(), axis.x());
+        double length = qMax(2.0, m_geometryParameters.value(QStringLiteral("length")).toDouble());
+        double width = qMax(1.0, m_geometryParameters.value(QStringLiteral("width")).toDouble());
+        const QPointF center(cx, cy);
+        if (m_geometryHandle == 0) {
+            cx += delta.x();
+            cy += delta.y();
+        } else if (m_geometryHandle == 1) {
+            length = qMax(2.0, 2.0 * QPointF::dotProduct(current - center, axis));
+        } else if (m_geometryHandle == 2) {
+            width = qMax(1.0, 2.0 * qAbs(QPointF::dotProduct(current - center, normal)));
+        }
+        m_geometryParameters.insert(QStringLiteral("cx"), cx);
+        m_geometryParameters.insert(QStringLiteral("cy"), cy);
+        m_geometryParameters.insert(QStringLiteral("length"), length);
+        m_geometryParameters.insert(QStringLiteral("width"), width);
+    }
+    m_geometryStart = current;
+    update();
 }
 
 void ImageCanvasWidget::setCheckerboardBackground(bool enabled)
@@ -434,7 +934,126 @@ void ImageCanvasWidget::mousePressEvent(QMouseEvent *event)
     if (m_image.isNull())
         return;
 
-    if (m_roiEditEnabled && event->button() == Qt::LeftButton && (event->modifiers() & Qt::ControlModifier)) {
+    const bool shiftTeach = (event->modifiers() & Qt::ShiftModifier);
+    const bool ctrlRoi = (event->modifiers() & Qt::ControlModifier);
+
+    // Ctrl prefers ROI handles so geometry tools do not steal ROI edits.
+    if (m_roiEditEnabled && event->button() == Qt::LeftButton && !m_roi.locked && ctrlRoi) {
+        const RoiHandle handle = hitTestHandle(event->pos());
+        if (handle != RoiHandle::None) {
+            m_editingRoi = true;
+            m_editingGeometry = false;
+            m_geometryHandle = -1;
+            m_activeHandle = handle;
+            m_lastMousePos = event->pos();
+            m_roiAtEditStart = m_roi.boundingRect();
+            event->accept();
+            return;
+        }
+    }
+
+    if (m_geometrySpec.editable && event->button() == Qt::LeftButton
+        && m_geometrySpec.kind != Selt::GeometryKind::None
+        && m_geometrySpec.kind != Selt::GeometryKind::NotApplicable
+        && m_geometrySpec.kind != Selt::GeometryKind::Roi
+        && m_geometrySpec.kind != Selt::GeometryKind::TemplateRoi) {
+        if (hitInteractiveGeometry(event->pos())) {
+            m_editingGeometry = true;
+            m_editingRoi = false;
+            m_geometryStart = widgetToImage(event->pos());
+            event->accept();
+            return;
+        }
+
+        // Click-to-teach only when geometry is missing; Point/ContourPick also accept Shift.
+        const QPointF imagePos = widgetToImage(event->pos());
+        bool placed = false;
+        auto missingKeys = [this](const QStringList &keys) {
+            for (const QString &k : keys) {
+                if (!m_geometryParameters.contains(k))
+                    return true;
+            }
+            return false;
+        };
+        if (m_geometrySpec.kind == Selt::GeometryKind::Point
+            && (shiftTeach
+                || missingKeys({QStringLiteral("x"), QStringLiteral("y")})
+                || missingKeys({QStringLiteral("refX"), QStringLiteral("refY")}))) {
+            const bool useRef = m_geometrySpec.parameterKeys.contains(QStringLiteral("refX"));
+            m_geometryParameters.insert(useRef ? QStringLiteral("refX") : QStringLiteral("x"),
+                                        imagePos.x());
+            m_geometryParameters.insert(useRef ? QStringLiteral("refY") : QStringLiteral("y"),
+                                        imagePos.y());
+            placed = true;
+        } else if (m_geometrySpec.kind == Selt::GeometryKind::ContourPick
+                   && (shiftTeach
+                       || missingKeys({QStringLiteral("pickX"), QStringLiteral("pickY")}))) {
+            m_geometryParameters.insert(QStringLiteral("pickX"), imagePos.x());
+            m_geometryParameters.insert(QStringLiteral("pickY"), imagePos.y());
+            placed = true;
+        } else if (m_geometrySpec.kind == Selt::GeometryKind::TwoPoint) {
+            const bool useRef = m_geometrySpec.parameterKeys.contains(QStringLiteral("refX"));
+            const QString ax = useRef ? QStringLiteral("refX") : QStringLiteral("x1");
+            const QString ay = useRef ? QStringLiteral("refY") : QStringLiteral("y1");
+            const QString bx = useRef ? QStringLiteral("x") : QStringLiteral("x2");
+            const QString by = useRef ? QStringLiteral("y") : QStringLiteral("y2");
+            if (!m_geometryParameters.contains(ax) || !m_geometryParameters.contains(ay)) {
+                m_geometryParameters.insert(ax, imagePos.x());
+                m_geometryParameters.insert(ay, imagePos.y());
+                placed = true;
+            } else if (!m_geometryParameters.contains(bx) || !m_geometryParameters.contains(by)) {
+                m_geometryParameters.insert(bx, imagePos.x());
+                m_geometryParameters.insert(by, imagePos.y());
+                placed = true;
+            }
+        } else if (m_geometrySpec.kind == Selt::GeometryKind::LineSegment
+                   && (!m_geometryParameters.contains(QStringLiteral("x0"))
+                       || !m_geometryParameters.contains(QStringLiteral("x1")))) {
+            m_geometryParameters.insert(QStringLiteral("x0"), imagePos.x() - 40.0);
+            m_geometryParameters.insert(QStringLiteral("y0"), imagePos.y());
+            m_geometryParameters.insert(QStringLiteral("x1"), imagePos.x() + 40.0);
+            m_geometryParameters.insert(QStringLiteral("y1"), imagePos.y());
+            placed = true;
+        } else if (m_geometrySpec.kind == Selt::GeometryKind::Circle
+                   && (!m_geometryParameters.contains(QStringLiteral("cx"))
+                       || !m_geometryParameters.contains(QStringLiteral("radius")))) {
+            m_geometryParameters.insert(QStringLiteral("cx"), imagePos.x());
+            m_geometryParameters.insert(QStringLiteral("cy"), imagePos.y());
+            m_geometryParameters.insert(QStringLiteral("radius"), 40.0);
+            placed = true;
+        } else if (m_geometrySpec.kind == Selt::GeometryKind::CaliperStrip
+                   && (!m_geometryParameters.contains(QStringLiteral("cx"))
+                       || !m_geometryParameters.contains(QStringLiteral("cy")))) {
+            m_geometryParameters.insert(QStringLiteral("cx"), imagePos.x());
+            m_geometryParameters.insert(QStringLiteral("cy"), imagePos.y());
+            if (!m_geometryParameters.contains(QStringLiteral("length")))
+                m_geometryParameters.insert(QStringLiteral("length"), 80.0);
+            if (!m_geometryParameters.contains(QStringLiteral("width")))
+                m_geometryParameters.insert(QStringLiteral("width"), 8.0);
+            if (!m_geometryParameters.contains(QStringLiteral("angle")))
+                m_geometryParameters.insert(QStringLiteral("angle"), 0.0);
+            placed = true;
+        } else if (m_geometrySpec.kind == Selt::GeometryKind::TwoLineSegment
+                   && (!m_geometryParameters.contains(QStringLiteral("x1"))
+                       || !m_geometryParameters.contains(QStringLiteral("x2")))) {
+            m_geometryParameters.insert(QStringLiteral("x1"), imagePos.x() - 40.0);
+            m_geometryParameters.insert(QStringLiteral("y1"), imagePos.y());
+            m_geometryParameters.insert(QStringLiteral("x2"), imagePos.x() + 40.0);
+            m_geometryParameters.insert(QStringLiteral("y2"), imagePos.y());
+            placed = true;
+        }
+        if (placed) {
+            emit interactiveGeometryChanged(m_geometryParameters);
+            update();
+            event->accept();
+            return;
+        }
+    }
+
+    const bool directRoiDraw = m_roiEditEnabled
+        && event->button() == Qt::LeftButton
+        && ((event->modifiers() & Qt::ControlModifier) || !m_roi.isValid());
+    if (directRoiDraw) {
         if (m_roi.locked) {
             event->accept();
             return;
@@ -456,6 +1075,7 @@ void ImageCanvasWidget::mousePressEvent(QMouseEvent *event)
         }
 
         m_drawingRoi = true;
+        m_editingGeometry = false;
         m_roiStart = widgetToImage(event->pos());
         m_roi = Selt::ExtendedRoi{};
         m_roi.shape = shapeForTool(m_roiTool);
@@ -472,6 +1092,8 @@ void ImageCanvasWidget::mousePressEvent(QMouseEvent *event)
         const RoiHandle handle = hitTestHandle(event->pos());
         if (handle != RoiHandle::None) {
             m_editingRoi = true;
+            m_editingGeometry = false;
+            m_geometryHandle = -1;
             m_activeHandle = handle;
             m_lastMousePos = event->pos();
             m_roiAtEditStart = m_roi.boundingRect();
@@ -489,6 +1111,13 @@ void ImageCanvasWidget::mousePressEvent(QMouseEvent *event)
 
 void ImageCanvasWidget::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_editingGeometry && m_geometryHandle >= 0
+        && m_geometrySpec.kind != Selt::GeometryKind::None) {
+        updateInteractiveGeometry(event->pos());
+        event->accept();
+        return;
+    }
+
     if (m_drawingRoi) {
         applyBoundingBoxToShape(QRectF(m_roiStart, widgetToImage(event->pos())));
         clampRoiToImage();
@@ -596,6 +1225,17 @@ void ImageCanvasWidget::mouseMoveEvent(QMouseEvent *event)
 
 void ImageCanvasWidget::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_editingGeometry && m_geometryHandle >= 0
+        && m_geometrySpec.kind != Selt::GeometryKind::None
+        && event->button() == Qt::LeftButton) {
+        m_editingGeometry = false;
+        m_geometryHandle = -1;
+        emit interactiveGeometryChanged(m_geometryParameters);
+        update();
+        event->accept();
+        return;
+    }
+
     if (m_drawingRoi && event->button() == Qt::LeftButton) {
         m_drawingRoi = false;
         m_roi.normalize();
@@ -800,11 +1440,26 @@ ImagePreviewWidget::ImagePreviewWidget(QWidget *parent)
             this, &ImagePreviewWidget::onPreviewSourceChanged);
     connect(m_canvas, &ImageCanvasWidget::roiChanged, this, &ImagePreviewWidget::roiChanged);
     connect(m_canvas, &ImageCanvasWidget::extendedRoiChanged, this, &ImagePreviewWidget::extendedRoiChanged);
+    connect(m_canvas, &ImageCanvasWidget::interactiveGeometryChanged,
+            this, &ImagePreviewWidget::interactiveGeometryChanged);
     connect(m_canvas, &ImageCanvasWidget::viewChanged, this, &ImagePreviewWidget::updateTitle);
     connect(m_canvas, &ImageCanvasWidget::cursorInfoChanged, this,
             [this](const QPointF &pos, const QColor &pixel, bool valid) {
                 updateHud(pos, pixel, valid);
             });
+}
+
+void ImagePreviewWidget::setInteractiveGeometry(const Selt::InteractiveGeometrySpec &spec,
+                                                const QJsonObject &parameters)
+{
+    if (m_canvas)
+        m_canvas->setInteractiveGeometry(spec, parameters);
+}
+
+void ImagePreviewWidget::clearInteractiveGeometry()
+{
+    if (m_canvas)
+        m_canvas->clearInteractiveGeometry();
 }
 
 void ImagePreviewWidget::configureCompactButton(QPushButton *button, const QString &text, const QString &tip)
@@ -955,6 +1610,8 @@ void ImagePreviewWidget::applyDisplayedImage()
     } else if (mode == 3) {
         image = m_roiImage;
     }
+    // ROI 裁剪视图下隐藏轮廓框，避免干扰查看。
+    m_canvas->setRoiOverlayHidden(mode == 3 && !m_roiImage.isNull());
     if (!image.isNull())
         m_canvas->setImage(image);
     // 切换层级时默认适应窗口，避免上一层缩放导致误判尺寸。
@@ -990,6 +1647,15 @@ void ImagePreviewWidget::setPreviewLayers(const QImage &original,
         m_debugImage = preprocess;
     }
     rebuildPreviewSourceCombo();
+    // 有有效 ROI 裁剪时，优先切到 ROI 视图，只看框选内容。
+    if (m_previewSourceCombo && !m_roiImage.isNull()) {
+        const int roiIndex = m_previewSourceCombo->findData(3);
+        if (roiIndex >= 0) {
+            m_previewSourceCombo->blockSignals(true);
+            m_previewSourceCombo->setCurrentIndex(roiIndex);
+            m_previewSourceCombo->blockSignals(false);
+        }
+    }
     applyDisplayedImage();
 }
 

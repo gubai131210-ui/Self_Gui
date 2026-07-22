@@ -186,13 +186,14 @@ static ModuleParamDef makeEnumParam(const QString &key, const QString &label,
 }
 
 static ModuleParamDef makeRoiApplyModeParam(int order,
-                                            const QString &group = QStringLiteral("ROI"))
+                                            const QString &group = QStringLiteral("ROI"),
+                                            const QString &defaultMode = QStringLiteral("mask"))
 {
     return makeEnumParam(QStringLiteral("roiApplyMode"), QStringLiteral("ROI应用模式"),
-                         {QStringLiteral("mask"), QStringLiteral("crop")},
-                         {QStringLiteral("掩膜外部"), QStringLiteral("裁剪")},
-                         QStringLiteral("mask"), order, group,
-                         QStringLiteral("mask=保留全图并置黑外部；crop=裁剪到 ROI 包围盒"));
+                         {QStringLiteral("mask"), QStringLiteral("crop"), QStringLiteral("crop_masked")},
+                         {QStringLiteral("掩膜外部"), QStringLiteral("裁剪"), QStringLiteral("裁剪+形状掩膜")},
+                         defaultMode, order, group,
+                         QStringLiteral("mask=全图置黑外部；crop=包围盒裁剪；crop_masked=裁剪后保留形状（推荐Blob）"));
 }
 
 static ModuleParamDef makeRoiParam(const QString &key, const QString &label, int order,
@@ -244,6 +245,7 @@ static ModuleDescriptor makeBase(const QString &typeId, const QString &name,
     d.iconKey = typeId; // per-operator SVG under resources/icons/vision/
     d.accentColor = Selt::accentColorForCategory(category);
     d.borderColor = d.accentColor;
+    d.interactiveGeometry = Selt::interactiveGeometrySpecForNode(typeId);
     if (category == QStringLiteral("测量") || category == QStringLiteral("定位")) {
         d.uiSchema.previewLayers = {QStringLiteral("image"), QStringLiteral("geometry"),
                                     QStringLiteral("measurement")};
@@ -923,26 +925,76 @@ static QVector<ModuleDescriptor> buildDescriptors()
             {QStringLiteral("confidence"), QStringLiteral("置信度"), false, Selt::DataTypeId::Real, false, {}},
             {QStringLiteral("candidateCount"), QStringLiteral("候选数"), false, Selt::DataTypeId::Int, false, {}}};
         d.parameters = {
-            makeDoubleParam(QStringLiteral("minArea"), QStringLiteral("最小面积"), 50.0, 0.0, 1e12, 0),
-            makeDoubleParam(QStringLiteral("maxArea"), QStringLiteral("最大面积"), 1e9, 0.0, 1e12, 1),
-            makeDoubleParam(QStringLiteral("minCircularity"), QStringLiteral("最小圆度"), 0.0, 0.0, 1.0, 2),
-            makeDoubleParam(QStringLiteral("minAspectRatio"), QStringLiteral("最小长宽比"), 0.0, 0.0, 100.0, 3),
-            makeDoubleParam(QStringLiteral("maxAspectRatio"), QStringLiteral("最大长宽比"), 100.0, 0.0, 100.0, 4),
-            makeDoubleParam(QStringLiteral("minExtent"), QStringLiteral("最小矩形度"), 0.0, 0.0, 1.0, 5),
-            makeDoubleParam(QStringLiteral("minSolidity"), QStringLiteral("最小实心度"), 0.0, 0.0, 1.0, 6),
-            makeIntParam(QStringLiteral("maxCount"), QStringLiteral("最大数量"), 100, 1, 1000, 7),
+            makeDoubleParam(QStringLiteral("minArea"), QStringLiteral("最小面积"), 0.0, 0.0, 1e12, 0,
+                            QStringLiteral("筛选"), QStringLiteral("0=不限制")),
+            makeDoubleParam(QStringLiteral("maxArea"), QStringLiteral("最大面积"), 0.0, 0.0, 1e12, 1,
+                            QStringLiteral("筛选"), QStringLiteral("0=不限制")),
+            makeDoubleParam(QStringLiteral("minCircularity"), QStringLiteral("最小圆度"), 0.0, 0.0, 1.0, 2,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxCircularity"), QStringLiteral("最大圆度"), 1.0, 0.0, 1.0, 3,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minAspectRatio"), QStringLiteral("最小长宽比"), 0.0, 0.0, 100.0, 4,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxAspectRatio"), QStringLiteral("最大长宽比"), 0.0, 0.0, 100.0, 5,
+                            QStringLiteral("筛选"), QStringLiteral("0=不限制")),
+            makeDoubleParam(QStringLiteral("minExtent"), QStringLiteral("最小矩形度"), 0.0, 0.0, 1.0, 6,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minSolidity"), QStringLiteral("最小实心度"), 0.0, 0.0, 1.0, 7,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minPerimeter"), QStringLiteral("最小周长"), 0.0, 0.0, 1e12, 8,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxPerimeter"), QStringLiteral("最大周长"), 0.0, 0.0, 1e12, 9,
+                            QStringLiteral("筛选"), QStringLiteral("0=不限制")),
+            makeDoubleParam(QStringLiteral("minElongation"), QStringLiteral("最小细长度"), 1.0, 1.0, 1e6, 10,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxElongation"), QStringLiteral("最大细长度"), 0.0, 0.0, 1e6, 11,
+                            QStringLiteral("筛选"), QStringLiteral("0=不限制")),
+            makeDoubleParam(QStringLiteral("minCx"), QStringLiteral("最小中心X"), -1e9, -1e9, 1e9, 12,
+                            QStringLiteral("位置")),
+            makeDoubleParam(QStringLiteral("maxCx"), QStringLiteral("最大中心X"), 1e9, -1e9, 1e9, 13,
+                            QStringLiteral("位置")),
+            makeDoubleParam(QStringLiteral("minCy"), QStringLiteral("最小中心Y"), -1e9, -1e9, 1e9, 14,
+                            QStringLiteral("位置")),
+            makeDoubleParam(QStringLiteral("maxCy"), QStringLiteral("最大中心Y"), 1e9, -1e9, 1e9, 15,
+                            QStringLiteral("位置")),
+            makeDoubleParam(QStringLiteral("minWidth"), QStringLiteral("最小宽度"), 0.0, 0.0, 1e9, 16,
+                            QStringLiteral("尺寸")),
+            makeDoubleParam(QStringLiteral("maxWidth"), QStringLiteral("最大宽度"), 0.0, 0.0, 1e9, 17,
+                            QStringLiteral("尺寸"), QStringLiteral("0=不限制")),
+            makeDoubleParam(QStringLiteral("minHeight"), QStringLiteral("最小高度"), 0.0, 0.0, 1e9, 18,
+                            QStringLiteral("尺寸")),
+            makeDoubleParam(QStringLiteral("maxHeight"), QStringLiteral("最大高度"), 0.0, 0.0, 1e9, 19,
+                            QStringLiteral("尺寸"), QStringLiteral("0=不限制")),
+            makeIntParam(QStringLiteral("maxCount"), QStringLiteral("最大数量"), 100, 1, 1000, 20,
+                         QStringLiteral("筛选")),
             makeEnumParam(QStringLiteral("sortBy"), QStringLiteral("排序"),
                           {QStringLiteral("area"), QStringLiteral("circularity"),
-                           QStringLiteral("x"), QStringLiteral("y")},
+                           QStringLiteral("x"), QStringLiteral("y"),
+                           QStringLiteral("elongation"), QStringLiteral("perimeter")},
                           {QStringLiteral("面积"), QStringLiteral("圆度"),
-                           QStringLiteral("X坐标"), QStringLiteral("Y坐标")},
-                          QStringLiteral("area"), 8),
-            makeIntParam(QStringLiteral("selectIndex"), QStringLiteral("选中索引"), 0, 0, 999, 9,
+                           QStringLiteral("X坐标"), QStringLiteral("Y坐标"),
+                           QStringLiteral("细长度"), QStringLiteral("周长")},
+                          QStringLiteral("area"), 21, QStringLiteral("筛选")),
+            makeIntParam(QStringLiteral("selectIndex"), QStringLiteral("选中索引"), 0, 0, 999, 22,
                          QStringLiteral("筛选"), QStringLiteral("排序后取第几个目标作为主输出")),
-            makeBoolParam(QStringLiteral("requireTarget"), QStringLiteral("必须有目标"), false, 10,
+            makeBoolParam(QStringLiteral("requireTarget"), QStringLiteral("必须有目标"), false, 23,
                           QStringLiteral("筛选"),
                           QStringLiteral("开启后空目标或索引越界将失败；数量检测可关闭")),
-            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 11)};
+            makeEnumParam(QStringLiteral("thresholdMode"), QStringLiteral("阈值模式"),
+                          {QStringLiteral("auto"), QStringLiteral("otsu"), QStringLiteral("manual"),
+                           QStringLiteral("relative")},
+                          {QStringLiteral("自动"), QStringLiteral("Otsu"), QStringLiteral("手动"),
+                           QStringLiteral("相对")},
+                          QStringLiteral("auto"), 24, QStringLiteral("分割")),
+            makeEnumParam(QStringLiteral("polarity"), QStringLiteral("目标极性"),
+                          {QStringLiteral("any"), QStringLiteral("light"), QStringLiteral("dark")},
+                          {QStringLiteral("自动"), QStringLiteral("亮目标"), QStringLiteral("暗目标")},
+                          QStringLiteral("any"), 25, QStringLiteral("分割"),
+                          QStringLiteral("白底黑物用暗目标；黑底白物用亮目标；默认自动双试")),
+            makeIntParam(QStringLiteral("threshold"), QStringLiteral("手动阈值"), 128, 0, 255, 26,
+                         QStringLiteral("分割")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 27),
+            makeRoiApplyModeParam(28, QStringLiteral("ROI"), QStringLiteral("crop_masked"))};
         d.inputKeys = {QStringLiteral("image")};
         d.outputKeys = {QStringLiteral("image"), QStringLiteral("region"), QStringLiteral("count"),
                         QStringLiteral("center"), QStringLiteral("area"), QStringLiteral("circularity"),
@@ -1012,23 +1064,71 @@ static QVector<ModuleDescriptor> buildDescriptors()
             {QStringLiteral("confidence"), QStringLiteral("置信度"), false, Selt::DataTypeId::Real, false, {}},
             {QStringLiteral("candidateCount"), QStringLiteral("候选数"), false, Selt::DataTypeId::Int, false, {}}};
         d.parameters = {
-            makeDoubleParam(QStringLiteral("minArea"), QStringLiteral("最小面积"), 50.0, 0.0, 1e12, 0),
-            makeDoubleParam(QStringLiteral("maxArea"), QStringLiteral("最大面积"), 1e9, 0.0, 1e12, 1),
-            makeDoubleParam(QStringLiteral("minCircularity"), QStringLiteral("最小圆度"), 0.2, 0.0, 1.0, 2),
-            makeDoubleParam(QStringLiteral("minAspectRatio"), QStringLiteral("最小长宽比"), 0.0, 0.0, 100.0, 3),
-            makeDoubleParam(QStringLiteral("maxAspectRatio"), QStringLiteral("最大长宽比"), 100.0, 0.0, 100.0, 4),
-            makeDoubleParam(QStringLiteral("minExtent"), QStringLiteral("最小矩形度"), 0.0, 0.0, 1.0, 5),
-            makeDoubleParam(QStringLiteral("minSolidity"), QStringLiteral("最小实心度"), 0.0, 0.0, 1.0, 6),
-            makeIntParam(QStringLiteral("maxCount"), QStringLiteral("最大数量"), 100, 1, 1000, 7),
+            makeDoubleParam(QStringLiteral("minArea"), QStringLiteral("最小面积"), 50.0, 0.0, 1e12, 0,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxArea"), QStringLiteral("最大面积"), 1e9, 0.0, 1e12, 1,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minCircularity"), QStringLiteral("最小圆度"), 0.2, 0.0, 1.0, 2,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxCircularity"), QStringLiteral("最大圆度"), 1.0, 0.0, 1.0, 3,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minAspectRatio"), QStringLiteral("最小长宽比"), 0.0, 0.0, 100.0, 4,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxAspectRatio"), QStringLiteral("最大长宽比"), 100.0, 0.0, 100.0, 5,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minExtent"), QStringLiteral("最小矩形度"), 0.0, 0.0, 1.0, 6,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minSolidity"), QStringLiteral("最小实心度"), 0.0, 0.0, 1.0, 7,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minPerimeter"), QStringLiteral("最小周长"), 0.0, 0.0, 1e12, 8,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxPerimeter"), QStringLiteral("最大周长"), 1e9, 0.0, 1e12, 9,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minElongation"), QStringLiteral("最小细长度"), 1.0, 1.0, 1e6, 10,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("maxElongation"), QStringLiteral("最大细长度"), 100.0, 1.0, 1e6, 11,
+                            QStringLiteral("筛选")),
+            makeDoubleParam(QStringLiteral("minCx"), QStringLiteral("最小中心X"), -1e9, -1e9, 1e9, 12,
+                            QStringLiteral("位置")),
+            makeDoubleParam(QStringLiteral("maxCx"), QStringLiteral("最大中心X"), 1e9, -1e9, 1e9, 13,
+                            QStringLiteral("位置")),
+            makeDoubleParam(QStringLiteral("minCy"), QStringLiteral("最小中心Y"), -1e9, -1e9, 1e9, 14,
+                            QStringLiteral("位置")),
+            makeDoubleParam(QStringLiteral("maxCy"), QStringLiteral("最大中心Y"), 1e9, -1e9, 1e9, 15,
+                            QStringLiteral("位置")),
+            makeDoubleParam(QStringLiteral("minWidth"), QStringLiteral("最小宽度"), 0.0, 0.0, 1e9, 16,
+                            QStringLiteral("尺寸")),
+            makeDoubleParam(QStringLiteral("maxWidth"), QStringLiteral("最大宽度"), 1e9, 0.0, 1e9, 17,
+                            QStringLiteral("尺寸")),
+            makeDoubleParam(QStringLiteral("minHeight"), QStringLiteral("最小高度"), 0.0, 0.0, 1e9, 18,
+                            QStringLiteral("尺寸")),
+            makeDoubleParam(QStringLiteral("maxHeight"), QStringLiteral("最大高度"), 1e9, 0.0, 1e9, 19,
+                            QStringLiteral("尺寸")),
+            makeIntParam(QStringLiteral("maxCount"), QStringLiteral("最大数量"), 100, 1, 1000, 20,
+                         QStringLiteral("筛选")),
             makeEnumParam(QStringLiteral("sortBy"), QStringLiteral("排序"),
                           {QStringLiteral("area"), QStringLiteral("circularity"),
-                           QStringLiteral("x"), QStringLiteral("y")},
+                           QStringLiteral("x"), QStringLiteral("y"),
+                           QStringLiteral("elongation"), QStringLiteral("perimeter")},
                           {QStringLiteral("面积"), QStringLiteral("圆度"),
-                           QStringLiteral("X坐标"), QStringLiteral("Y坐标")},
-                          QStringLiteral("area"), 8),
-            makeIntParam(QStringLiteral("selectIndex"), QStringLiteral("选中索引"), 0, 0, 999, 9,
+                           QStringLiteral("X坐标"), QStringLiteral("Y坐标"),
+                           QStringLiteral("细长度"), QStringLiteral("周长")},
+                          QStringLiteral("area"), 21, QStringLiteral("筛选")),
+            makeIntParam(QStringLiteral("selectIndex"), QStringLiteral("选中索引"), 0, 0, 999, 22,
                          QStringLiteral("筛选"), QStringLiteral("排序后取第几个目标作为主输出")),
-            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 10)};
+            makeEnumParam(QStringLiteral("thresholdMode"), QStringLiteral("阈值模式"),
+                          {QStringLiteral("auto"), QStringLiteral("otsu"), QStringLiteral("manual"),
+                           QStringLiteral("relative")},
+                          {QStringLiteral("自动"), QStringLiteral("Otsu"), QStringLiteral("手动"),
+                           QStringLiteral("相对")},
+                          QStringLiteral("auto"), 23, QStringLiteral("分割")),
+            makeEnumParam(QStringLiteral("polarity"), QStringLiteral("目标极性"),
+                          {QStringLiteral("any"), QStringLiteral("light"), QStringLiteral("dark")},
+                          {QStringLiteral("自动"), QStringLiteral("亮目标"), QStringLiteral("暗目标")},
+                          QStringLiteral("any"), 24, QStringLiteral("分割"),
+                          QStringLiteral("白底黑物用暗目标；黑底白物用亮目标；默认自动双试")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 25),
+            makeRoiApplyModeParam(26, QStringLiteral("ROI"), QStringLiteral("crop_masked"))};
         d.inputKeys = {QStringLiteral("image")};
         d.outputKeys = {QStringLiteral("image"), QStringLiteral("region"), QStringLiteral("center"),
                         QStringLiteral("area"), QStringLiteral("count"), QStringLiteral("selectedIndex"),
@@ -1140,7 +1240,8 @@ static QVector<ModuleDescriptor> buildDescriptors()
             makeDoubleParam(QStringLiteral("x3"), QStringLiteral("X3"), 0.0, -1e9, 1e9, 4),
             makeDoubleParam(QStringLiteral("y3"), QStringLiteral("Y3"), 0.0, -1e9, 1e9, 5),
             makeDoubleParam(QStringLiteral("x4"), QStringLiteral("X4"), 0.0, -1e9, 1e9, 6),
-            makeDoubleParam(QStringLiteral("y4"), QStringLiteral("Y4"), 100.0, -1e9, 1e9, 7)};
+            makeDoubleParam(QStringLiteral("y4"), QStringLiteral("Y4"), 100.0, -1e9, 1e9, 7),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 8)};
         d.inputKeys = {QStringLiteral("line1"), QStringLiteral("line2")};
         d.outputKeys = {QStringLiteral("angle"), QStringLiteral("measurement")};
         list.append(d);
@@ -1153,6 +1254,16 @@ static QVector<ModuleDescriptor> buildDescriptors()
             {QStringLiteral("line2"), QStringLiteral("线2"), true, Selt::DataTypeId::Line, true, {}},
             {QStringLiteral("distance"), QStringLiteral("距离"), false, Selt::DataTypeId::Real, false, {}},
             {QStringLiteral("measurement"), QStringLiteral("测量"), false, Selt::DataTypeId::Measurement, false, {}}};
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("x1"), QStringLiteral("线1起点X"), 0.0, -1e9, 1e9, 0,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("y1"), QStringLiteral("线1起点Y"), 0.0, -1e9, 1e9, 1,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("x2"), QStringLiteral("线1终点X"), 100.0, -1e9, 1e9, 2,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("y2"), QStringLiteral("线1终点Y"), 0.0, -1e9, 1e9, 3,
+                            QStringLiteral("几何")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 4)};
         d.inputKeys = {QStringLiteral("line1"), QStringLiteral("line2")};
         d.outputKeys = {QStringLiteral("distance"), QStringLiteral("measurement")};
         list.append(d);
@@ -1204,6 +1315,126 @@ static QVector<ModuleDescriptor> buildDescriptors()
         list.append(d);
     }
     {
+        ModuleDescriptor d = makeBase(VisionNodeIds::findLine(), QStringLiteral("查找直线"),
+                                      QStringLiteral("测量"),
+                                      QStringLiteral("多卡尺沿期望线段探边并拟合直线"));
+        d.ports = {
+            {QStringLiteral("in"), QStringLiteral("图像"), true, Selt::DataTypeId::Image, true, {}},
+            {QStringLiteral("out"), QStringLiteral("图像"), false, Selt::DataTypeId::Image, false, {}},
+            {QStringLiteral("line"), QStringLiteral("直线"), false, Selt::DataTypeId::Line, false, {}},
+            {QStringLiteral("angle"), QStringLiteral("角度"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("length"), QStringLiteral("长度"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("residualRms"), QStringLiteral("残差RMS"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("inlierCount"), QStringLiteral("内点数"), false, Selt::DataTypeId::Int, false, {}},
+            {QStringLiteral("confidence"), QStringLiteral("置信度"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("measurement"), QStringLiteral("测量"), false, Selt::DataTypeId::Measurement, false, {}}};
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("x0"), QStringLiteral("起点X"), 0.0, -1e9, 1e9, 0,
+                            QStringLiteral("几何"), QStringLiteral("在图像上拖拽示教；勿依赖默认假线段")),
+            makeDoubleParam(QStringLiteral("y0"), QStringLiteral("起点Y"), 0.0, -1e9, 1e9, 1,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("x1"), QStringLiteral("终点X"), 0.0, -1e9, 1e9, 2,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("y1"), QStringLiteral("终点Y"), 0.0, -1e9, 1e9, 3,
+                            QStringLiteral("几何")),
+            makeEnumParam(QStringLiteral("searchMode"), QStringLiteral("搜索模式"),
+                          {QStringLiteral("auto"), QStringLiteral("strict")},
+                          {QStringLiteral("自动宽松"), QStringLiteral("严格")},
+                          QStringLiteral("auto"), 4, QStringLiteral("卡尺"),
+                          QStringLiteral("自动模式：卡尺数/搜索长度/忽略点数自适应")),
+            makeIntParam(QStringLiteral("numCalipers"), QStringLiteral("卡尺数量"), 0, 0, 64, 5,
+                         QStringLiteral("卡尺"), QStringLiteral("0=Auto（按线段长度推断）")),
+            makeDoubleParam(QStringLiteral("searchLength"), QStringLiteral("搜索长度"), 0.0, 0.0, 1e4, 6,
+                            QStringLiteral("卡尺"), QStringLiteral("0=Auto")),
+            makeDoubleParam(QStringLiteral("projectionLength"), QStringLiteral("投影宽度"), 0.0, 0.0, 1e4, 7,
+                            QStringLiteral("卡尺"), QStringLiteral("0=Auto")),
+            makeIntParam(QStringLiteral("numToIgnore"), QStringLiteral("忽略点数"), -1, -1, 32, 8,
+                         QStringLiteral("卡尺"), QStringLiteral("-1=Auto")),
+            makeEnumParam(QStringLiteral("polarity"), QStringLiteral("边缘极性"),
+                          {QStringLiteral("any"), QStringLiteral("dark_to_light"), QStringLiteral("light_to_dark")},
+                          {QStringLiteral("任意"), QStringLiteral("暗到亮"), QStringLiteral("亮到暗")},
+                          QStringLiteral("any"), 9, QStringLiteral("边缘")),
+            makeDoubleParam(QStringLiteral("gradientThreshold"), QStringLiteral("梯度阈值"), 0.0, 0.0, 255.0, 10,
+                            QStringLiteral("边缘"), QStringLiteral("0=Auto")),
+            makeDoubleParam(QStringLiteral("smoothSigma"), QStringLiteral("平滑Sigma"), 0.0, 0.0, 20.0, 11,
+                            QStringLiteral("边缘"), QStringLiteral("0=Auto")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 12),
+            makeRoiApplyModeParam(13)};
+        // Mark Auto-capable numeric keys for inspector / contract.
+        for (ModuleParamDef &p : d.parameters) {
+            if (p.key == QLatin1String("numCalipers") || p.key == QLatin1String("searchLength")
+                || p.key == QLatin1String("projectionLength") || p.key == QLatin1String("numToIgnore")
+                || p.key == QLatin1String("gradientThreshold") || p.key == QLatin1String("smoothSigma")) {
+                p.autoPolicy = ModuleParamAutoPolicy::Auto;
+                p.autoPlaceholder = QStringLiteral("Auto");
+            }
+        }
+        d.inputKeys = {QStringLiteral("image")};
+        d.outputKeys = {QStringLiteral("image"), QStringLiteral("line"), QStringLiteral("angle"),
+                        QStringLiteral("length"), QStringLiteral("residualRms"),
+                        QStringLiteral("inlierCount"), QStringLiteral("confidence"),
+                        QStringLiteral("measurement")};
+        list.append(d);
+    }
+    {
+        ModuleDescriptor d = makeBase(VisionNodeIds::findCircle(), QStringLiteral("查找圆"),
+                                      QStringLiteral("测量"),
+                                      QStringLiteral("多卡尺沿期望圆弧探边并拟合圆"));
+        d.ports = {
+            {QStringLiteral("in"), QStringLiteral("图像"), true, Selt::DataTypeId::Image, true, {}},
+            {QStringLiteral("out"), QStringLiteral("图像"), false, Selt::DataTypeId::Image, false, {}},
+            {QStringLiteral("circle"), QStringLiteral("圆"), false, Selt::DataTypeId::Circle, false, {}},
+            {QStringLiteral("center"), QStringLiteral("中心"), false, Selt::DataTypeId::Point2D, false, {}},
+            {QStringLiteral("radius"), QStringLiteral("半径"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("diameter"), QStringLiteral("直径"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("residualRms"), QStringLiteral("残差RMS"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("inlierCount"), QStringLiteral("内点数"), false, Selt::DataTypeId::Int, false, {}},
+            {QStringLiteral("confidence"), QStringLiteral("置信度"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("measurement"), QStringLiteral("测量"), false, Selt::DataTypeId::Measurement, false, {}}};
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("cx"), QStringLiteral("圆心X"), 0.0, -1e9, 1e9, 0,
+                            QStringLiteral("几何"), QStringLiteral("在图像上拖拽示教期望圆")),
+            makeDoubleParam(QStringLiteral("cy"), QStringLiteral("圆心Y"), 0.0, -1e9, 1e9, 1,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("radius"), QStringLiteral("期望半径"), 0.0, 0.0, 1e6, 2,
+                            QStringLiteral("几何"), QStringLiteral("示教初值；结果半径默认自由拟合")),
+            makeEnumParam(QStringLiteral("searchMode"), QStringLiteral("搜索模式"),
+                          {QStringLiteral("auto"), QStringLiteral("strict")},
+                          {QStringLiteral("自动宽松"), QStringLiteral("严格")},
+                          QStringLiteral("auto"), 3, QStringLiteral("卡尺"),
+                          QStringLiteral("自动模式：搜索长度/忽略点数/反向搜索自适应")),
+            makeIntParam(QStringLiteral("numCalipers"), QStringLiteral("卡尺数量"), 12, 3, 64, 4,
+                         QStringLiteral("卡尺")),
+            makeDoubleParam(QStringLiteral("searchLength"), QStringLiteral("搜索长度"), 0.0, 0.0, 1e4, 5,
+                            QStringLiteral("卡尺"), QStringLiteral("0=自动（约0.45×半径）")),
+            makeDoubleParam(QStringLiteral("projectionLength"), QStringLiteral("投影宽度"), 0.0, 0.0, 1e4, 6,
+                            QStringLiteral("卡尺"), QStringLiteral("0=自动")),
+            makeIntParam(QStringLiteral("numToIgnore"), QStringLiteral("忽略点数"), -1, -1, 32, 7,
+                         QStringLiteral("卡尺"), QStringLiteral("-1=自动（约35%卡尺）")),
+            makeDoubleParam(QStringLiteral("angleStart"), QStringLiteral("起始角"), 0.0, -720.0, 720.0, 8,
+                            QStringLiteral("几何"), QStringLiteral("卡尺分布起始角（度）")),
+            makeDoubleParam(QStringLiteral("angleSpan"), QStringLiteral("角度跨度"), 360.0, 1.0, 720.0, 9,
+                            QStringLiteral("几何")),
+            makeBoolParam(QStringLiteral("searchInward"), QStringLiteral("向内搜索"), true, 10,
+                          QStringLiteral("卡尺"), QStringLiteral("开启后沿半径指向圆心搜索；自动模式失败时会尝试反向")),
+            makeEnumParam(QStringLiteral("polarity"), QStringLiteral("边缘极性"),
+                          {QStringLiteral("any"), QStringLiteral("dark_to_light"), QStringLiteral("light_to_dark")},
+                          {QStringLiteral("任意"), QStringLiteral("暗到亮"), QStringLiteral("亮到暗")},
+                          QStringLiteral("any"), 11, QStringLiteral("边缘")),
+            makeDoubleParam(QStringLiteral("gradientThreshold"), QStringLiteral("梯度阈值"), 0.5, 0.0, 255.0, 12,
+                            QStringLiteral("边缘")),
+            makeDoubleParam(QStringLiteral("smoothSigma"), QStringLiteral("平滑Sigma"), 0.8, 0.0, 20.0, 13,
+                            QStringLiteral("边缘")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 14),
+            makeRoiApplyModeParam(15)};
+        d.inputKeys = {QStringLiteral("image")};
+        d.outputKeys = {QStringLiteral("image"), QStringLiteral("circle"), QStringLiteral("center"),
+                        QStringLiteral("radius"), QStringLiteral("diameter"), QStringLiteral("residualRms"),
+                        QStringLiteral("inlierCount"), QStringLiteral("confidence"),
+                        QStringLiteral("measurement"), QStringLiteral("overlay")};
+        list.append(d);
+    }
+    {
         ModuleDescriptor d = makeBase(VisionNodeIds::fitCircle(), QStringLiteral("拟合圆"),
                                       QStringLiteral("测量"), QStringLiteral("由点/轮廓拟合圆"));
         d.ports = {
@@ -1231,7 +1462,9 @@ static QVector<ModuleDescriptor> buildDescriptors()
                           {QStringLiteral("最多点"), QStringLiteral("指定索引")},
                           QStringLiteral("maxPoints"), 5, QStringLiteral("输入")),
             makeIntParam(QStringLiteral("contourIndex"), QStringLiteral("轮廓索引"), 0, 0, 10000, 6,
-                         QStringLiteral("输入"))};
+                         QStringLiteral("输入")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 7),
+            makeRoiApplyModeParam(8)};
         d.inputKeys = {QStringLiteral("contours")};
         d.outputKeys = {QStringLiteral("circle"), QStringLiteral("center"), QStringLiteral("radius"), QStringLiteral("diameter"), QStringLiteral("measurement")};
         list.append(d);
@@ -1263,7 +1496,9 @@ static QVector<ModuleDescriptor> buildDescriptors()
                           {QStringLiteral("最多点"), QStringLiteral("指定索引")},
                           QStringLiteral("maxPoints"), 5, QStringLiteral("输入")),
             makeIntParam(QStringLiteral("contourIndex"), QStringLiteral("轮廓索引"), 0, 0, 10000, 6,
-                         QStringLiteral("输入"))};
+                         QStringLiteral("输入")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 7),
+            makeRoiApplyModeParam(8)};
         d.inputKeys = {QStringLiteral("contours")};
         d.outputKeys = {QStringLiteral("line"), QStringLiteral("angle"), QStringLiteral("length"), QStringLiteral("measurement")};
         list.append(d);
@@ -1818,6 +2053,16 @@ static QVector<ModuleDescriptor> buildDescriptors()
             {QStringLiteral("line"), QStringLiteral("直线"), true, Selt::DataTypeId::Line, true, {}},
             {QStringLiteral("distance"), QStringLiteral("距离"), false, Selt::DataTypeId::Real, false, {}},
             {QStringLiteral("ok"), QStringLiteral("成功"), false, Selt::DataTypeId::Bool, false, {}}};
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("x1"), QStringLiteral("线起点X"), 0.0, -1e9, 1e9, 0,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("y1"), QStringLiteral("线起点Y"), 0.0, -1e9, 1e9, 1,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("x2"), QStringLiteral("线终点X"), 100.0, -1e9, 1e9, 2,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("y2"), QStringLiteral("线终点Y"), 0.0, -1e9, 1e9, 3,
+                            QStringLiteral("几何")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 4)};
         d.inputKeys = {QStringLiteral("point"), QStringLiteral("line")};
         d.outputKeys = {QStringLiteral("distance"), QStringLiteral("ok")};
         list.append(d);
@@ -1863,6 +2108,16 @@ static QVector<ModuleDescriptor> buildDescriptors()
             {QStringLiteral("angle"), QStringLiteral("夹角"), false, Selt::DataTypeId::Real, false, {}},
             {QStringLiteral("deviation"), QStringLiteral("偏差"), false, Selt::DataTypeId::Real, false, {}},
             {QStringLiteral("measurement"), QStringLiteral("测量"), false, Selt::DataTypeId::Measurement, false, {}}};
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("x1"), QStringLiteral("线1起点X"), 0.0, -1e9, 1e9, 0,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("y1"), QStringLiteral("线1起点Y"), 0.0, -1e9, 1e9, 1,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("x2"), QStringLiteral("线1终点X"), 100.0, -1e9, 1e9, 2,
+                            QStringLiteral("几何")),
+            makeDoubleParam(QStringLiteral("y2"), QStringLiteral("线1终点Y"), 0.0, -1e9, 1e9, 3,
+                            QStringLiteral("几何")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 4)};
         d.inputKeys = {QStringLiteral("line1"), QStringLiteral("line2")};
         d.outputKeys = {QStringLiteral("angle"), QStringLiteral("deviation"), QStringLiteral("measurement")};
         list.append(d);

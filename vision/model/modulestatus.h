@@ -7,6 +7,7 @@ enum class ModuleStatus {
     Idle,
     Running,
     Success,
+    SuccessWithWarning,
     Failed,
     Disabled
 };
@@ -18,6 +19,8 @@ inline QString moduleStatusToString(ModuleStatus status)
         return QStringLiteral("执行中");
     case ModuleStatus::Success:
         return QStringLiteral("成功");
+    case ModuleStatus::SuccessWithWarning:
+        return QStringLiteral("成功(警告)");
     case ModuleStatus::Failed:
         return QStringLiteral("失败");
     case ModuleStatus::Disabled:

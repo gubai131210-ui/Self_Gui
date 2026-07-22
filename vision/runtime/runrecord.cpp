@@ -15,6 +15,8 @@ QString runRecordStatusCode(ModuleStatus status)
         return QStringLiteral("running");
     case ModuleStatus::Success:
         return QStringLiteral("success");
+    case ModuleStatus::SuccessWithWarning:
+        return QStringLiteral("success_with_warning");
     case ModuleStatus::Failed:
         return QStringLiteral("failed");
     case ModuleStatus::Disabled:
@@ -31,6 +33,8 @@ ModuleStatus runRecordStatusFromCode(const QString &text)
         return ModuleStatus::Running;
     if (text == QLatin1String("success"))
         return ModuleStatus::Success;
+    if (text == QLatin1String("success_with_warning"))
+        return ModuleStatus::SuccessWithWarning;
     if (text == QLatin1String("failed"))
         return ModuleStatus::Failed;
     if (text == QLatin1String("disabled"))

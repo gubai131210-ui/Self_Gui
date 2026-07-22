@@ -32,6 +32,7 @@
         <file>icons/status_ok.svg</file>
         <file>icons/status_fail.svg</file>
         <file>icons/node.svg</file>
+        <file>icons/app_icon.svg</file>
         <!-- VISION_ICONS_BEGIN -->
         <file>icons/vision/cat_decision.svg</file>
         <file>icons/vision/cat_input.svg</file>
@@ -62,6 +63,8 @@
         <file>icons/vision/vision_distanceMeasure.svg</file>
         <file>icons/vision/vision_featureMatch.svg</file>
         <file>icons/vision/vision_findContours.svg</file>
+        <file>icons/vision/vision_findCircle.svg</file>
+        <file>icons/vision/vision_findLine.svg</file>
         <file>icons/vision/vision_fitCircle.svg</file>
         <file>icons/vision/vision_fitLine.svg</file>
         <file>icons/vision/vision_gaussianBlur.svg</file>

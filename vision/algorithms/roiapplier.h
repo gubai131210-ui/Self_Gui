@@ -5,13 +5,15 @@
 #include "vision/model/visionimage.h"
 
 #include <QJsonObject>
+#include <QPointF>
 #include <QString>
 
 namespace Selt {
 
 enum class RoiApplyMode {
     MaskOutside, // keep full image size; outside ROI becomes black
-    Crop         // crop to ROI bounding box
+    Crop,        // crop to ROI bounding box (rectangle only semantics for shape bbox)
+    CropMasked   // crop to bbox then keep only ROI shape pixels (preferred for Blob)
 };
 
 struct RoiApplyResult
@@ -21,6 +23,8 @@ struct RoiApplyResult
     QString errorMessage;
     QString diagnosticCode;
     ExtendedRoi appliedRoi;
+    /// Top-left of cropped region in source image coordinates (0,0 for MaskOutside).
+    QPointF originOffset;
 };
 
 class RoiApplier
@@ -28,6 +32,9 @@ class RoiApplier
 public:
     /// Prefer extendedRoi JSON; fall back to legacy roi JSON.
     static ExtendedRoi parseFromParameters(const QJsonObject &params);
+
+    /// Prefer upstream `roi` parameter when `preferParameterRoi` is set, else extendedRoi first.
+    static ExtendedRoi parseFromParameters(const QJsonObject &params, bool preferParameterRoi);
 
     static RoiApplyResult apply(const VisionImage &input,
                                 const ExtendedRoi &roi,

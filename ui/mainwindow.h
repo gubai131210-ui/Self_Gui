@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QJsonObject>
 #include <QString>
 
 #ifndef SELT_HAS_OPENCV
@@ -10,6 +11,7 @@
 
 #if SELT_HAS_OPENCV
 #include "vision/model/roi.h"
+#include "vision/model/extendedroi.h"
 #include "vision/model/visioncontext.h"
 #endif
 
@@ -95,6 +97,8 @@ private slots:
 #if SELT_HAS_OPENCV
     void onVisionOutputNodeChanged(const QString &nodeId);
     void onResultRoiChanged(const RoiRect &roi);
+    void onResultExtendedRoiChanged(const Selt::ExtendedRoi &roi);
+    void onInteractiveGeometryChanged(const QJsonObject &parameters);
     void onTeachTemplateRequested();
     void onRunFinished(bool ok, const VisionContext &context);
     void onRunProgress(const QString &nodeId, ModuleStatus status);
@@ -142,6 +146,7 @@ private:
 #if SELT_HAS_OPENCV
     void applyVisionContext(const VisionContext &context, bool focusFailedNode);
     void refreshResultPreview(const QString &nodeId);
+    void syncInteractiveGeometry(const QString &nodeId);
     void updateNodeRunStatuses(const VisionContext &context);
     void updateNodeRunStatus(const QString &nodeId, ModuleStatus status);
     void clearNodeRunStatuses();

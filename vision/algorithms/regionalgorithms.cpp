@@ -56,6 +56,98 @@ cv::Mat toBinary8u(const cv::Mat &src)
     return binary;
 }
 
+cv::Mat toBinary8uMasked(const cv::Mat &src,
+                         const cv::Mat &validMask,
+                         const QString &thresholdMode,
+                         const QString &polarity,
+                         int manualThreshold)
+{
+    cv::Mat gray = toGrayMat(src);
+    if (gray.type() != CV_8UC1)
+        gray.convertTo(gray, CV_8U);
+
+    cv::Mat mask;
+    if (!validMask.empty()) {
+        if (validMask.size() != gray.size())
+            cv::resize(validMask, mask, gray.size(), 0, 0, cv::INTER_NEAREST);
+        else
+            mask = validMask;
+        if (mask.type() != CV_8UC1)
+            mask.convertTo(mask, CV_8U);
+    }
+
+    const int total = gray.rows * gray.cols;
+    const int nonZero = mask.empty() ? cv::countNonZero(gray) : cv::countNonZero(mask);
+    double minV = 0.0;
+    double maxV = 0.0;
+    if (mask.empty()) {
+        cv::minMaxLoc(gray, &minV, &maxV);
+    } else {
+        cv::minMaxLoc(gray, &minV, &maxV, nullptr, nullptr, mask);
+    }
+    const bool looksBinary = (minV == 0.0 && maxV == 255.0)
+        && (nonZero == 0 || nonZero == total || nonZero < total * 0.95);
+
+    const QString mode = thresholdMode.toLower();
+    const QString pol = polarity.toLower();
+    int threshType = (pol == QLatin1String("light")) ? cv::THRESH_BINARY : cv::THRESH_BINARY_INV;
+    if (pol == QLatin1String("any") || pol.isEmpty())
+        threshType = cv::THRESH_BINARY; // will flip later if needed via Otsu dual attempt
+
+    cv::Mat binary;
+    if (looksBinary && (mode == QLatin1String("auto") || mode.isEmpty())) {
+        cv::threshold(gray, binary, 0, 255, cv::THRESH_BINARY);
+    } else if (mode == QLatin1String("manual")) {
+        cv::threshold(gray, binary, manualThreshold, 255, threshType);
+    } else if (mode == QLatin1String("relative")) {
+        const double mid = 0.5 * (minV + maxV);
+        cv::threshold(gray, binary, mid, 255, threshType);
+    } else {
+        // Otsu only on valid pixels: temporarily set outside to median of inside to avoid bias.
+        cv::Mat work = gray.clone();
+        if (!mask.empty()) {
+            const double meanInside = cv::mean(gray, mask)[0];
+            work.setTo(cv::Scalar(meanInside), mask == 0);
+        }
+        if (pol == QLatin1String("any") || pol.isEmpty()) {
+            cv::Mat binDark;
+            cv::Mat binLight;
+            cv::threshold(work, binDark, 0, 255, cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
+            cv::threshold(work, binLight, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+            if (!mask.empty()) {
+                cv::bitwise_and(binDark, mask, binDark);
+                cv::bitwise_and(binLight, mask, binLight);
+            }
+            // Prefer polarity that yields compact mid-sized blobs (not empty / not full).
+            const int darkNz = cv::countNonZero(binDark);
+            const int lightNz = cv::countNonZero(binLight);
+            const int valid = mask.empty() ? total : cv::countNonZero(mask);
+            const double darkFill = valid > 0 ? double(darkNz) / double(valid) : 1.0;
+            const double lightFill = valid > 0 ? double(lightNz) / double(valid) : 1.0;
+            auto bandScore = [](double fill) {
+                // Ideal object fill is small-to-moderate; near-full is almost always background.
+                if (fill < 0.005 || fill > 0.65)
+                    return -1.0;
+                return 1.0 - std::abs(fill - 0.18);
+            };
+            const double darkScore = bandScore(darkFill);
+            const double lightScore = bandScore(lightFill);
+            if (lightScore > darkScore)
+                binary = binLight;
+            else if (darkScore > lightScore)
+                binary = binDark;
+            else
+                binary = (lightFill <= darkFill) ? binLight : binDark;
+        } else {
+            cv::threshold(work, binary, 0, 255, threshType | cv::THRESH_OTSU);
+        }
+    }
+
+    if (!mask.empty())
+        cv::bitwise_and(binary, mask, binary);
+    return binary;
+}
+
 cv::Mat toBgrDisplay(const cv::Mat &src)
 {
     cv::Mat display;
@@ -250,6 +342,18 @@ bool BlobAnalyzeAlgorithm::apply(const VisionImage &input,
                                  int *selectedIndex,
                                  QString *error)
 {
+    return apply(input, options, outRegion, outScores, overlay, selectedIndex, nullptr, error);
+}
+
+bool BlobAnalyzeAlgorithm::apply(const VisionImage &input,
+                                 const Options &options,
+                                 RegionData &outRegion,
+                                 QVector<double> &outScores,
+                                 VisionImage &overlay,
+                                 int *selectedIndex,
+                                 int *unfilteredCount,
+                                 QString *error)
+{
     if (!requireInput(input, error))
         return false;
 
@@ -257,18 +361,35 @@ bool BlobAnalyzeAlgorithm::apply(const VisionImage &input,
     outScores.clear();
     if (selectedIndex)
         *selectedIndex = -1;
+    if (unfilteredCount)
+        *unfilteredCount = 0;
 
     const double areaMin = qMax(0.0, options.minArea);
     const double areaMax = options.maxArea > 0.0 ? options.maxArea : 1e18;
-    const double circMin = qBound(0.0, 1.0, options.minCircularity);
+    const double circMin = qBound(0.0, options.minCircularity, 1.0);
+    const double circMax = qBound(0.0, options.maxCircularity, 1.0);
+    const double periMin = qMax(0.0, options.minPerimeter);
+    const double periMax = options.maxPerimeter > 0.0 ? options.maxPerimeter : 1e18;
+    const double elongMin = qMax(1.0, options.minElongation);
+    const double elongMax = options.maxElongation > 0.0 ? options.maxElongation : 1e18;
+    const double maxW = options.maxWidth > 0.0 ? options.maxWidth : 1e18;
+    const double maxH = options.maxHeight > 0.0 ? options.maxHeight : 1e18;
+    const double maxAspect = options.maxAspectRatio > 0.0 ? options.maxAspectRatio : 1e18;
 
     cv::Mat display;
     QVector<RegionStats> regions;
     QVector<double> scores;
-    QVector<int> contourIndexes;
+    int rawCandidateCount = 0;
 
     if (!Selt::runOpenCv([&]() {
-            const cv::Mat binary = toBinary8u(input.mat());
+            cv::Mat maskMat;
+            if (!options.validMask.isEmpty())
+                maskMat = options.validMask.mat();
+            const cv::Mat binary = toBinary8uMasked(input.mat(),
+                                                   maskMat,
+                                                   options.thresholdMode,
+                                                   options.polarity,
+                                                   options.manualThreshold);
             std::vector<std::vector<cv::Point>> contours;
             cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_NONE);
             display = toBgrDisplay(input.mat());
@@ -282,19 +403,25 @@ bool BlobAnalyzeAlgorithm::apply(const VisionImage &input,
 
             for (size_t i = 0; i < contours.size(); ++i) {
                 const double area = cv::contourArea(contours[i]);
+                if (area < 1.0)
+                    continue;
+                ++rawCandidateCount;
+
                 if (area < areaMin || area > areaMax)
                     continue;
                 const double peri = cv::arcLength(contours[i], true);
+                if (peri < periMin || peri > periMax)
+                    continue;
                 const double circularity =
                     peri > 1e-6 ? (4.0 * CV_PI * area) / (peri * peri) : 0.0;
-                if (circularity < circMin)
+                if (circularity < circMin || circularity > circMax)
                     continue;
 
                 const cv::RotatedRect rr = cv::minAreaRect(contours[i]);
                 const double w = qMax(1e-6, double(rr.size.width));
                 const double h = qMax(1e-6, double(rr.size.height));
                 const double aspect = qMax(w, h) / qMin(w, h);
-                if (aspect < options.minAspectRatio || aspect > options.maxAspectRatio)
+                if (aspect < options.minAspectRatio || aspect > maxAspect)
                     continue;
                 const double extent = area / (w * h);
                 if (extent < options.minExtent)
@@ -314,18 +441,45 @@ bool BlobAnalyzeAlgorithm::apply(const VisionImage &input,
                     const cv::Rect box = cv::boundingRect(contours[i]);
                     center = QPointF(box.x + box.width * 0.5, box.y + box.height * 0.5);
                 }
+                const QPointF globalCenter = center + options.originOffset;
+                if (globalCenter.x() < options.minCx || globalCenter.x() > options.maxCx
+                    || globalCenter.y() < options.minCy || globalCenter.y() > options.maxCy)
+                    continue;
+
+                double elongation = 1.0;
+                if (std::abs(m.m00) > 1e-6) {
+                    const double mu20 = m.mu20 / m.m00;
+                    const double mu02 = m.mu02 / m.m00;
+                    const double mu11 = m.mu11 / m.m00;
+                    const double delta =
+                        std::sqrt(4.0 * mu11 * mu11 + (mu20 - mu02) * (mu20 - mu02));
+                    const double major = (mu20 + mu02 + delta) * 0.5;
+                    const double minorM = (mu20 + mu02 - delta) * 0.5;
+                    elongation = minorM > 1e-10 ? major / minorM : 1.0;
+                }
+                if (elongation < elongMin || elongation > elongMax)
+                    continue;
+
+                if (w < options.minWidth || w > maxW || h < options.minHeight || h > maxH)
+                    continue;
+
                 const cv::Rect aabb = cv::boundingRect(contours[i]);
 
                 Blob b;
-                b.stats.centroid = center;
+                b.stats.centroid = globalCenter;
                 b.stats.area = area;
+                b.stats.perimeter = peri;
                 b.stats.circularity = circularity;
+                b.stats.elongation = elongation;
                 b.stats.aspectRatio = aspect;
                 b.stats.extent = extent;
                 b.stats.solidity = solidity;
                 b.stats.width = w;
                 b.stats.height = h;
-                b.stats.boundingRect = QRectF(aabb.x, aabb.y, aabb.width, aabb.height);
+                b.stats.boundingRect = QRectF(aabb.x + options.originOffset.x(),
+                                              aabb.y + options.originOffset.y(),
+                                              aabb.width,
+                                              aabb.height);
                 b.score = circularity;
                 b.contourIndex = int(i);
                 blobs.append(b);
@@ -346,6 +500,16 @@ bool BlobAnalyzeAlgorithm::apply(const VisionImage &input,
                           [](const Blob &a, const Blob &b) {
                               return a.stats.centroid.y() < b.stats.centroid.y();
                           });
+            } else if (options.sortBy == QLatin1String("elongation")) {
+                std::sort(blobs.begin(), blobs.end(),
+                          [](const Blob &a, const Blob &b) {
+                              return a.stats.elongation > b.stats.elongation;
+                          });
+            } else if (options.sortBy == QLatin1String("perimeter")) {
+                std::sort(blobs.begin(), blobs.end(),
+                          [](const Blob &a, const Blob &b) {
+                              return a.stats.perimeter > b.stats.perimeter;
+                          });
             } else {
                 std::sort(blobs.begin(), blobs.end(),
                           [](const Blob &a, const Blob &b) { return a.stats.area > b.stats.area; });
@@ -358,16 +522,20 @@ bool BlobAnalyzeAlgorithm::apply(const VisionImage &input,
                 b.stats.label = i + 1;
                 regions.append(b.stats);
                 scores.append(b.score);
-                contourIndexes.append(b.contourIndex);
+                // Draw in local coordinates (overlay stays on cropped/masked image).
+                const QPointF local = b.stats.centroid - options.originOffset;
                 cv::drawContours(display, contours, b.contourIndex, cv::Scalar(0, 255, 0), 2);
                 cv::circle(display,
-                           cv::Point(static_cast<int>(std::lround(b.stats.centroid.x())),
-                                     static_cast<int>(std::lround(b.stats.centroid.y()))),
+                           cv::Point(static_cast<int>(std::lround(local.x())),
+                                     static_cast<int>(std::lround(local.y()))),
                            3, cv::Scalar(0, 0, 255), -1);
             }
         }, error)) {
         return false;
     }
+
+    if (unfilteredCount)
+        *unfilteredCount = rawCandidateCount;
 
     outRegion.regions = regions;
     outRegion.labelCount = regions.size();
@@ -380,9 +548,10 @@ bool BlobAnalyzeAlgorithm::apply(const VisionImage &input,
         if (selectedIndex)
             *selectedIndex = sel;
         const RegionStats &picked = regions.at(sel);
+        const QPointF local = picked.centroid - options.originOffset;
         cv::circle(display,
-                   cv::Point(static_cast<int>(std::lround(picked.centroid.x())),
-                             static_cast<int>(std::lround(picked.centroid.y()))),
+                   cv::Point(static_cast<int>(std::lround(local.x())),
+                             static_cast<int>(std::lround(local.y()))),
                    8, cv::Scalar(0, 165, 255), 2);
     } else if (selectedIndex) {
         *selectedIndex = -1;

@@ -133,6 +133,10 @@ bool collectNodeInputs(const Document &document, const NodeModel &node, const Mo
     auto elevateRoiParams = [&](const RoiRect &roi) {
         QJsonObject params = req->parameters;
         params.insert(QStringLiteral("roi"), roi.toJson());
+        // Upstream ROI must win over a stale panel extendedRoi.
+        params.remove(QStringLiteral("extendedRoi"));
+        params.insert(QStringLiteral("_preferParameterRoi"), true);
+        params.insert(QStringLiteral("_upstreamRoi"), true);
         req->parameters = params;
     };
 
@@ -519,11 +523,15 @@ bool FlowRuntime::executeOnce(const Document &document, VisionContext &context,
         moduleResult.elapsedMs = result.elapsedMs;
         moduleResult.overlays = result.overlays;
         moduleResult.measurement = result.measurement;
-        moduleResult.failureKind = result.status == ModuleStatus::Success
+        moduleResult.failureKind =
+            (result.status == ModuleStatus::Success
+             || result.status == ModuleStatus::SuccessWithWarning)
             ? QString()
             : runtimeFailureKindToString(RuntimeFailureKind::Execution);
-        // 保留诊断码（含 Success 下的 no_target / low_confidence），供运行监视展示。
+        // 保留诊断码（含 Success / SuccessWithWarning 下的 soft codes），供运行监视展示。
         moduleResult.diagnosticCode = result.diagnosticCode;
+        moduleResult.failureStage = result.failureStage;
+        moduleResult.qualityScore = result.qualityScore;
 
         for (auto it = result.outputs.cbegin(); it != result.outputs.cend(); ++it) {
             const QString typeId = Selt::dataTypeIdToString(it.value().type());
@@ -550,8 +558,9 @@ bool FlowRuntime::executeOnce(const Document &document, VisionContext &context,
                 record.status = QStringLiteral("capability_missing");
             } else if (result.status == ModuleStatus::Failed) {
                 record.status = QStringLiteral("fail");
-            } else if (!result.diagnosticCode.isEmpty()
-                       && result.diagnosticCode != QLatin1String("none")) {
+            } else if (result.status == ModuleStatus::SuccessWithWarning
+                       || (!result.diagnosticCode.isEmpty()
+                           && result.diagnosticCode != QLatin1String("none"))) {
                 record.status = QStringLiteral("warn");
             }
             moduleResult.outputPortRecords.append(record);
@@ -571,7 +580,8 @@ bool FlowRuntime::executeOnce(const Document &document, VisionContext &context,
 
         storeExecutionOutputs(node, desc, result, &portStore);
 
-        if (result.status != ModuleStatus::Success) {
+        if (result.status != ModuleStatus::Success
+            && result.status != ModuleStatus::SuccessWithWarning) {
             commitModuleResult(nodeId, moduleResult);
             const RuntimeDiagnostic rd = RuntimeDiagnostic::make(
                 RuntimeFailureKind::Execution,

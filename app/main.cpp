@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
+#include <QIcon>
 
 // Force-link Qt resources compiled from resources/selt.qrc
 static void initSeltResources()
@@ -23,6 +24,7 @@ int main(int argc, char *argv[])
     QApplication::setOrganizationName(QStringLiteral("Selt"));
     QApplication::setApplicationName(Selt::VersionInfo::productName());
     QApplication::setApplicationVersion(Selt::VersionInfo::productVersionString());
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/selt/icons/app_icon.svg")));
 
 #if SELT_HAS_OPENCV
     Selt::registerBuiltInOpenCvExecutors();

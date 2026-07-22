@@ -40,6 +40,8 @@ struct ModuleRunResult
     QString failureKind;
     /// Stable machine code (e.g. image_empty); independent of failureKind taxonomy.
     QString diagnosticCode;
+    QString failureStage;
+    double qualityScore{1.0};
     QHash<QString, QString> inputSummary;
     QHash<QString, QString> outputSummary;
     /// portId -> DataTypeId 字符串（如 Real / String / Image），便于结果面板按类型展示与连线参考。

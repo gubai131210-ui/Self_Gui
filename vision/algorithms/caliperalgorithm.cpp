@@ -205,7 +205,7 @@ bool fitLineL2(const QVector<QPointF> &points, FitLineResult *result, QString *c
     result->angleDeg = std::atan2(dir.y(), dir.x()) * 180.0 / CV_PI;
     result->residualRms = std::sqrt(sumSq / points.size());
     result->inlierCount = points.size();
-    result->confidence = qBound(0.0, 1.0, 1.0 - result->residualRms / 5.0);
+    result->confidence = qBound(0.0, 1.0 - result->residualRms / 5.0, 1.0);
     return true;
 }
 
@@ -330,7 +330,7 @@ bool CaliperAlgorithm::sample(const VisionImage &input,
         const double bestIdx = refinePeakIndex(profile, best.index);
         const double bestT = -halfLen + (length * bestIdx) / double(samples - 1);
         edgePoints.append(QPointF(center.x() + bestT * c, center.y() + bestT * s));
-        confidence = qBound(0.0, 1.0, best.mag / (best.mag + 20.0));
+        confidence = qBound(0.0, best.mag / (best.mag + 20.0), 1.0);
 
         const int minGapSamples = qMax(1, int(std::lround(options.minEdgeGap / step)));
         Peak second{-1, 0.0};
@@ -345,7 +345,7 @@ bool CaliperAlgorithm::sample(const VisionImage &input,
             const double secondT = -halfLen + (length * secondIdx) / double(samples - 1);
             edgePoints.append(QPointF(center.x() + secondT * c, center.y() + secondT * s));
             distance = QLineF(edgePoints.first(), edgePoints.last()).length();
-            confidence = qBound(0.0, 1.0, 0.5 * (confidence + second.mag / (second.mag + 20.0)));
+            confidence = qBound(0.0, 0.5 * (confidence + second.mag / (second.mag + 20.0)), 1.0);
         }
 
         cv::Mat display;
@@ -430,7 +430,7 @@ bool FitCircleAlgorithm::fit(const QVector<QPointF> &points,
             result.radius = double(r);
             result.residualRms = circleResidualRms(points, result.center, result.radius);
             result.inlierCount = points.size();
-            result.confidence = qBound(0.0, 1.0, 1.0 - result.residualRms / qMax(3.0, result.radius * 0.35));
+            result.confidence = qBound(0.0, 1.0 - result.residualRms / qMax(3.0, result.radius * 0.35), 1.0);
             ok = result.radius > 0.0 && std::isfinite(result.radius)
                 && result.residualRms < qMax(3.0, result.radius * 0.35);
             if (!ok)
@@ -478,9 +478,8 @@ bool FitCircleAlgorithm::fit(const QVector<QPointF> &points,
             candidate.radius = double(fr);
             candidate.inlierCount = inliers.size();
             candidate.residualRms = circleResidualRms(inliers, candidate.center, candidate.radius);
-            candidate.confidence = qBound(0.0, 1.0,
-                                         double(inliers.size()) / points.size()
-                                             * (1.0 - candidate.residualRms / qMax(1.0, options.residualThreshold * 2.0)));
+            candidate.confidence = qBound(0.0, double(inliers.size()) / points.size()
+                                             * (1.0 - candidate.residualRms / qMax(1.0, options.residualThreshold * 2.0)), 1.0);
             if (candidate.inlierCount > best.inlierCount
                 || (candidate.inlierCount == best.inlierCount
                     && candidate.residualRms < best.residualRms))
@@ -568,7 +567,7 @@ bool FitLineAlgorithm::fit(const QVector<QPointF> &points,
             if (!fitLineL2(inliers, &candidate, nullptr))
                 continue;
             candidate.inlierCount = inliers.size();
-            candidate.confidence = qBound(0.0, 1.0, double(inliers.size()) / points.size());
+            candidate.confidence = qBound(0.0, double(inliers.size()) / points.size(), 1.0);
             if (candidate.inlierCount > best.inlierCount
                 || (candidate.inlierCount == best.inlierCount
                     && candidate.residualRms < best.residualRms))
@@ -674,4 +673,370 @@ bool PositionDeviationAlgorithm::fromPoints(const QPointF &actual,
     dy = actual.y() - reference.y();
     distance = qHypot(dx, dy);
     return std::isfinite(distance);
+}
+
+namespace {
+
+cv::Mat toBgrDisplayLocal(const cv::Mat &src)
+{
+    cv::Mat display;
+    if (src.channels() == 1)
+        cv::cvtColor(src, display, cv::COLOR_GRAY2BGR);
+    else if (src.channels() == 3)
+        display = src.clone();
+    else
+        cv::cvtColor(src, display, cv::COLOR_BGRA2BGR);
+    return display;
+}
+
+void drawCaliperStrip(cv::Mat &display,
+                      const QPointF &center,
+                      double angleDeg,
+                      double length,
+                      double width,
+                      const cv::Scalar &color)
+{
+    const double rad = angleDeg * CV_PI / 180.0;
+    const double c = std::cos(rad);
+    const double s = std::sin(rad);
+    const double halfL = length * 0.5;
+    const double halfW = width * 0.5;
+    const cv::Point2f corners[4] = {
+        cv::Point2f(float(center.x() - halfL * c + halfW * s),
+                    float(center.y() - halfL * s - halfW * c)),
+        cv::Point2f(float(center.x() + halfL * c + halfW * s),
+                    float(center.y() + halfL * s - halfW * c)),
+        cv::Point2f(float(center.x() + halfL * c - halfW * s),
+                    float(center.y() + halfL * s + halfW * c)),
+        cv::Point2f(float(center.x() - halfL * c - halfW * s),
+                    float(center.y() - halfL * s + halfW * c)),
+    };
+    for (int i = 0; i < 4; ++i)
+        cv::line(display, corners[i], corners[(i + 1) % 4], color, 1, cv::LINE_AA);
+}
+
+} // namespace
+
+bool FindLineByCalipersAlgorithm::apply(const VisionImage &input,
+                                        QPointF p0,
+                                        QPointF p1,
+                                        const FindLineByCalipersOptions &opts,
+                                        FitLineResult &result,
+                                        QVector<QPointF> &foundEdgePoints,
+                                        VisionImage &overlay,
+                                        QString *error)
+{
+    result = {};
+    foundEdgePoints.clear();
+    if (input.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("查找直线输入图像为空");
+        return false;
+    }
+    const QLineF expected(p0, p1);
+    if (expected.length() < 1e-3) {
+        if (error)
+            *error = QStringLiteral("期望线段长度无效");
+        return false;
+    }
+    const int n = qMax(2, opts.numCalipers);
+    const double searchLen = qMax(2.0, opts.searchLength);
+    const double projLen = qMax(1.0, opts.projectionLength);
+    const bool autoMode = opts.searchMode.compare(QLatin1String("strict"), Qt::CaseInsensitive) != 0;
+    // Auto: allow up to ~45% misses; never refuse a fit if >=2 edges were found.
+    const int allowFail = autoMode
+        ? qMax(opts.numToIgnore, int(std::lround(n * 0.45)))
+        : qMax(0, opts.numToIgnore);
+
+    const double lineAngleDeg = expected.angle(); // Qt: CCW from +X
+    const QVector<double> searchAngles = autoMode
+        ? QVector<double>{lineAngleDeg + 90.0, lineAngleDeg - 90.0}
+        : QVector<double>{lineAngleDeg + 90.0};
+
+    QVector<QPointF> caliperCenters;
+    caliperCenters.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        const double t = (n == 1) ? 0.5 : (i + 0.5) / double(n);
+        caliperCenters.append(p0 + t * (p1 - p0));
+    }
+
+    int failed = 0;
+    double usedSearchAngle = searchAngles.first();
+    for (double searchAngleDeg : searchAngles) {
+        failed = 0;
+        foundEdgePoints.clear();
+        for (const QPointF &c : caliperCenters) {
+            QVector<QPointF> edges;
+            double distance = 0.0;
+            double confidence = 0.0;
+            VisionImage stripOverlay;
+            QString stripErr;
+            if (!CaliperAlgorithm::sample(input, c, searchAngleDeg, searchLen, projLen,
+                                          opts.caliperOpts, edges, distance, confidence,
+                                          stripOverlay, &stripErr)
+                || edges.isEmpty()) {
+                ++failed;
+                continue;
+            }
+            foundEdgePoints.append(edges.first());
+        }
+        usedSearchAngle = searchAngleDeg;
+        if (failed <= allowFail && foundEdgePoints.size() >= 2)
+            break;
+        if (!autoMode)
+            break;
+    }
+
+    const int minNeeded = 2;
+    if (foundEdgePoints.size() < minNeeded) {
+        if (error)
+            *error = QStringLiteral("有效边缘点不足，无法拟合直线（失败卡尺 %1/%2）")
+                         .arg(failed)
+                         .arg(n);
+        return false;
+    }
+    // Soft fail only when too few points remain; excess misses become quality warning via confidence.
+    if (failed > allowFail && !autoMode) {
+        if (error)
+            *error = QStringLiteral("卡尺失败数 %1 超过允许忽略数 %2")
+                         .arg(failed)
+                         .arg(allowFail);
+        return false;
+    }
+
+    FitOptions fitOpts;
+    fitOpts.mode = QStringLiteral("ransac");
+    fitOpts.residualThreshold = autoMode ? 3.0 : 2.0;
+    fitOpts.maxIterations = 100;
+    fitOpts.minInlierRatio = autoMode ? 0.35 : 0.5;
+    fitOpts.minInliers = qMax(2, foundEdgePoints.size() - allowFail);
+    if (!FitLineAlgorithm::fit(foundEdgePoints, fitOpts, result, error))
+        return false;
+    if (failed > allowFail)
+        result.confidence = qMin(result.confidence, 0.45);
+
+    QString cvError;
+    const bool ran = Selt::runOpenCv([&]() {
+        cv::Mat display = toBgrDisplayLocal(input.mat());
+        cv::line(display,
+                 cv::Point(int(std::lround(p0.x())), int(std::lround(p0.y()))),
+                 cv::Point(int(std::lround(p1.x())), int(std::lround(p1.y()))),
+                 cv::Scalar(140, 140, 140), 1, cv::LINE_AA);
+        for (const QPointF &c : caliperCenters)
+            drawCaliperStrip(display, c, usedSearchAngle, searchLen, projLen,
+                             cv::Scalar(180, 180, 80));
+        for (const QPointF &ep : foundEdgePoints)
+            cv::circle(display,
+                       cv::Point(int(std::lround(ep.x())), int(std::lround(ep.y()))),
+                       3, cv::Scalar(0, 255, 0), -1, cv::LINE_AA);
+        cv::line(display,
+                 cv::Point(int(std::lround(result.start.x())), int(std::lround(result.start.y()))),
+                 cv::Point(int(std::lround(result.end.x())), int(std::lround(result.end.y()))),
+                 cv::Scalar(255, 220, 0), 2, cv::LINE_AA);
+        overlay = VisionImage(display, input.sourcePath());
+    }, error);
+    if (!ran) {
+        if (error && error->isEmpty())
+            *error = cvError.isEmpty() ? QStringLiteral("查找直线叠加绘制失败") : cvError;
+        return false;
+    }
+    return true;
+}
+
+bool FindCircleByCalipersAlgorithm::apply(const VisionImage &input,
+                                          QPointF center,
+                                          double radius,
+                                          const FindCircleByCalipersOptions &opts,
+                                          FitCircleResult &result,
+                                          QVector<QPointF> &foundEdgePoints,
+                                          VisionImage &overlay,
+                                          QString *error)
+{
+    return apply(input, center, radius, opts, result, foundEdgePoints, overlay, nullptr, error);
+}
+
+bool FindCircleByCalipersAlgorithm::apply(const VisionImage &input,
+                                          QPointF center,
+                                          double radius,
+                                          const FindCircleByCalipersOptions &opts,
+                                          FitCircleResult &result,
+                                          QVector<QPointF> &foundEdgePoints,
+                                          VisionImage &overlay,
+                                          FindCircleDiagnostics *diagnostics,
+                                          QString *error)
+{
+    result = {};
+    foundEdgePoints.clear();
+    FindCircleDiagnostics diag;
+    if (input.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("查找圆输入图像为空");
+        diag.failureStage = QStringLiteral("input");
+        if (diagnostics)
+            *diagnostics = diag;
+        return false;
+    }
+    if (!(radius > 1.0) || !std::isfinite(center.x()) || !std::isfinite(center.y())) {
+        if (error)
+            *error = QStringLiteral("期望圆心/半径无效");
+        diag.failureStage = QStringLiteral("geometry");
+        if (diagnostics)
+            *diagnostics = diag;
+        return false;
+    }
+
+    const bool autoMode = opts.searchMode.toLower() != QLatin1String("strict");
+    const int n = qMax(3, opts.numCalipers);
+    double searchLen = opts.searchLength;
+    if (!(searchLen > 1.0))
+        searchLen = qMax(12.0, radius * (autoMode ? 0.45 : 0.30));
+    double projLen = opts.projectionLength;
+    if (!(projLen > 0.5))
+        projLen = qBound(3.0, radius * 0.08, 24.0);
+    int allowFail = opts.numToIgnore;
+    if (allowFail < 0)
+        allowFail = autoMode ? qMax(1, int(std::lround(n * 0.35))) : qMax(0, int(std::lround(n * 0.15)));
+    const double span = opts.angleSpanDeg;
+    const double start = opts.angleStartDeg;
+
+    CaliperOptions calOpts = opts.caliperOpts;
+    if (autoMode) {
+        calOpts.gradientThreshold = qMin(calOpts.gradientThreshold, 0.5);
+        if (!(calOpts.smoothSigma > 0.0))
+            calOpts.smoothSigma = 0.8;
+        if (calOpts.polarity.isEmpty())
+            calOpts.polarity = QStringLiteral("any");
+    }
+
+    auto sampleEdges = [&](bool inward, QVector<QPointF> *edgesOut, int *failedOut,
+                           QVector<QPointF> *centersOut, QVector<double> *anglesOut) {
+        edgesOut->clear();
+        *failedOut = 0;
+        centersOut->clear();
+        anglesOut->clear();
+        centersOut->reserve(n);
+        anglesOut->reserve(n);
+        for (int i = 0; i < n; ++i) {
+            const double t = (n == 1) ? 0.0
+                                      : double(i) / double(n - (std::abs(span) >= 359.9 ? 0 : 1));
+            const double angDeg = start + t * span;
+            const double angRad = angDeg * CV_PI / 180.0;
+            const QPointF c(center.x() + radius * std::cos(angRad),
+                            center.y() + radius * std::sin(angRad));
+            centersOut->append(c);
+            const double radialOutDeg = angDeg;
+            const double searchAng = inward ? (radialOutDeg + 180.0) : radialOutDeg;
+            anglesOut->append(searchAng);
+
+            QVector<QPointF> edges;
+            double distance = 0.0;
+            double confidence = 0.0;
+            VisionImage stripOverlay;
+            QString stripErr;
+            if (!CaliperAlgorithm::sample(input, c, searchAng, searchLen, projLen, calOpts, edges,
+                                          distance, confidence, stripOverlay, &stripErr)
+                || edges.isEmpty()) {
+                ++(*failedOut);
+                continue;
+            }
+            edgesOut->append(edges.first());
+        }
+    };
+
+    QVector<QPointF> caliperCenters;
+    QVector<double> searchAngles;
+    int failed = 0;
+    sampleEdges(opts.searchInward, &foundEdgePoints, &failed, &caliperCenters, &searchAngles);
+
+    // Auto mode: if too many failures, try reverse search direction once.
+    if (autoMode && failed > allowFail) {
+        QVector<QPointF> altEdges;
+        QVector<QPointF> altCenters;
+        QVector<double> altAngles;
+        int altFailed = 0;
+        sampleEdges(!opts.searchInward, &altEdges, &altFailed, &altCenters, &altAngles);
+        if (altEdges.size() > foundEdgePoints.size()) {
+            foundEdgePoints = altEdges;
+            failed = altFailed;
+            caliperCenters = altCenters;
+            searchAngles = altAngles;
+        }
+    }
+
+    diag.caliperCount = n;
+    diag.failedCalipers = failed;
+    diag.foundEdgePoints = foundEdgePoints.size();
+
+    // Soften: if enough points remain for a circle, prefer fitting over hard fail on ignore count.
+    const int remaining = foundEdgePoints.size();
+    if (remaining < 3) {
+        if (error)
+            *error = QStringLiteral("有效边缘点不足，无法拟合圆（失败卡尺 %1/%2）")
+                         .arg(failed)
+                         .arg(n);
+        diag.failureStage = QStringLiteral("edges");
+        if (diagnostics)
+            *diagnostics = diag;
+        return false;
+    }
+    if (!autoMode && failed > allowFail) {
+        if (error)
+            *error = QStringLiteral("卡尺失败数 %1 超过允许忽略数 %2").arg(failed).arg(allowFail);
+        diag.failureStage = QStringLiteral("caliper");
+        if (diagnostics)
+            *diagnostics = diag;
+        return false;
+    }
+
+    FitOptions fitOpts;
+    fitOpts.mode = QStringLiteral("ransac");
+    fitOpts.residualThreshold = autoMode ? 4.0 : 2.0;
+    fitOpts.maxIterations = 160;
+    fitOpts.minInlierRatio = autoMode ? 0.4 : 0.5;
+    fitOpts.minInliers = qMax(3, remaining - qMax(allowFail, failed));
+    if (!FitCircleAlgorithm::fit(foundEdgePoints, fitOpts, result, error)) {
+        // Fallback algebraic fit for auto mode.
+        if (autoMode) {
+            FitOptions soft;
+            soft.mode = QStringLiteral("algebraic");
+            soft.minInliers = 3;
+            soft.minInlierRatio = 0.3;
+            soft.residualThreshold = 6.0;
+            if (!FitCircleAlgorithm::fit(foundEdgePoints, soft, result, error)) {
+                diag.failureStage = QStringLiteral("fit");
+                if (diagnostics)
+                    *diagnostics = diag;
+                return false;
+            }
+        } else {
+            diag.failureStage = QStringLiteral("fit");
+            if (diagnostics)
+                *diagnostics = diag;
+            return false;
+        }
+    }
+
+    diag.usedInliers = result.inlierCount;
+    diag.residualRms = result.residualRms;
+    if (diagnostics)
+        *diagnostics = diag;
+
+    const bool ran = Selt::runOpenCv([&]() {
+        cv::Mat display = toBgrDisplayLocal(input.mat());
+        cv::circle(display,
+                   cv::Point(int(std::lround(center.x())), int(std::lround(center.y()))),
+                   int(std::lround(radius)), cv::Scalar(140, 140, 140), 1, cv::LINE_AA);
+        for (int i = 0; i < caliperCenters.size(); ++i)
+            drawCaliperStrip(display, caliperCenters.at(i), searchAngles.at(i), searchLen, projLen,
+                             cv::Scalar(180, 180, 80));
+        for (const QPointF &ep : foundEdgePoints)
+            cv::circle(display,
+                       cv::Point(int(std::lround(ep.x())), int(std::lround(ep.y()))),
+                       3, cv::Scalar(0, 255, 0), -1, cv::LINE_AA);
+        cv::circle(display,
+                   cv::Point(int(std::lround(result.center.x())), int(std::lround(result.center.y()))),
+                   int(std::lround(result.radius)), cv::Scalar(255, 220, 0), 2, cv::LINE_AA);
+        overlay = VisionImage(display, input.sourcePath());
+    }, error);
+    return ran;
 }

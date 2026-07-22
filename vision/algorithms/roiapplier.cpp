@@ -62,6 +62,17 @@ cv::Mat buildMask(const cv::Mat &src, const ExtendedRoi &roi)
 
 ExtendedRoi RoiApplier::parseFromParameters(const QJsonObject &params)
 {
+    return parseFromParameters(params, false);
+}
+
+ExtendedRoi RoiApplier::parseFromParameters(const QJsonObject &params, bool preferParameterRoi)
+{
+    if (preferParameterRoi) {
+        const RoiRect legacy = RoiRect::fromJson(params.value(QStringLiteral("roi")).toObject());
+        ExtendedRoi fromLegacy = ExtendedRoi::fromLegacyRect(legacy);
+        if (fromLegacy.isValid())
+            return fromLegacy;
+    }
     if (params.contains(QStringLiteral("extendedRoi"))) {
         ExtendedRoi roi = ExtendedRoi::fromJson(params.value(QStringLiteral("extendedRoi")).toObject());
         if (roi.isValid())
@@ -82,6 +93,7 @@ RoiApplyResult RoiApplier::apply(const VisionImage &input, const ExtendedRoi &ro
     if (!roi.isValid()) {
         out.ok = true;
         out.image = input;
+        out.originOffset = QPointF(0.0, 0.0);
         return out;
     }
 
@@ -97,7 +109,7 @@ RoiApplyResult RoiApplier::apply(const VisionImage &input, const ExtendedRoi &ro
     QString error;
     const bool ran = runOpenCv([&]() {
         const cv::Mat &src = input.mat();
-        if (mode == RoiApplyMode::Crop) {
+        if (mode == RoiApplyMode::Crop || mode == RoiApplyMode::CropMasked) {
             const QRectF box = clamped.boundingRect().intersected(QRectF(0, 0, src.cols, src.rows));
             if (box.width() < 1.0 || box.height() < 1.0) {
                 out.errorMessage = QStringLiteral("ROI 裁剪区域无效");
@@ -105,9 +117,34 @@ RoiApplyResult RoiApplier::apply(const VisionImage &input, const ExtendedRoi &ro
                 return;
             }
             const cv::Rect cvRoi(int(box.x()), int(box.y()), int(box.width()), int(box.height()));
-            out.image = VisionImage(src(cvRoi).clone(), input.sourcePath());
+            cv::Mat cropped = src(cvRoi).clone();
+            if (mode == RoiApplyMode::CropMasked && clamped.shape != RoiShapeType::Rectangle) {
+                ExtendedRoi local = clamped;
+                local.clampToImage(QSize(src.cols, src.rows));
+                // Shift geometry into cropped coordinates.
+                if (local.shape == RoiShapeType::Circle || local.shape == RoiShapeType::Ellipse
+                    || local.shape == RoiShapeType::RotatedRect) {
+                    local.center -= QPointF(box.x(), box.y());
+                } else if (local.shape == RoiShapeType::Polygon) {
+                    for (QPointF &p : local.polygon)
+                        p -= QPointF(box.x(), box.y());
+                } else {
+                    local.rect = QRectF(0, 0, box.width(), box.height());
+                }
+                cv::Mat mask = buildMask(cropped, local);
+                if (cv::countNonZero(mask) == 0) {
+                    out.errorMessage = QStringLiteral("ROI 掩膜为空");
+                    out.diagnosticCode = DiagnosticCodes::invalidRoi();
+                    return;
+                }
+                cv::Mat masked = cv::Mat::zeros(cropped.size(), cropped.type());
+                cropped.copyTo(masked, mask);
+                cropped = masked;
+            }
+            out.image = VisionImage(cropped, input.sourcePath());
             out.ok = true;
             out.appliedRoi = clamped;
+            out.originOffset = QPointF(box.x(), box.y());
             return;
         }
 
@@ -122,6 +159,7 @@ RoiApplyResult RoiApplier::apply(const VisionImage &input, const ExtendedRoi &ro
         out.image = VisionImage(masked, input.sourcePath());
         out.ok = true;
         out.appliedRoi = clamped;
+        out.originOffset = QPointF(0.0, 0.0);
     }, &error);
 
     if (!ran) {
@@ -136,7 +174,8 @@ RoiApplyResult RoiApplier::applyFromParameters(const VisionImage &input,
                                                const QJsonObject &params,
                                                RoiApplyMode mode)
 {
-    return apply(input, parseFromParameters(params), mode);
+    const bool preferParamRoi = params.value(QStringLiteral("_preferParameterRoi")).toBool(false);
+    return apply(input, parseFromParameters(params, preferParamRoi), mode);
 }
 
 } // namespace Selt

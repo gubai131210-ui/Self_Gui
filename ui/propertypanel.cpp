@@ -116,11 +116,12 @@ void PropertyPanel::setModuleStatusText(const QString &text)
         status = NodeRunVisualStatus::Failed;
     } else if (lower.contains(QStringLiteral("run")) || text.contains(QStringLiteral("运行中"))) {
         status = NodeRunVisualStatus::Running;
+    } else if (text.contains(QStringLiteral("警告"))
+               || lower.contains(QStringLiteral("warning"))) {
+        status = NodeRunVisualStatus::Warning;
     } else if (lower.contains(QStringLiteral("ok")) || text.contains(QStringLiteral("成功"))
                || text.contains(QStringLiteral("完成"))) {
         status = NodeRunVisualStatus::Success;
-    } else if (text.contains(QStringLiteral("警告"))) {
-        status = NodeRunVisualStatus::Warning;
     }
     setModuleRunStatus(status, text);
 }

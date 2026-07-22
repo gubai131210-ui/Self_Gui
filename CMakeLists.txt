@@ -308,6 +308,10 @@ qt_add_executable(Selt_Gui
 # Compile resources/selt.qrc → :/selt/icons/... (paths are relative to the .qrc file)
 set(SELT_QRC "${CMAKE_CURRENT_SOURCE_DIR}/resources/selt.qrc")
 target_sources(Selt_Gui PRIVATE ${SELT_QRC})
+if(WIN32)
+    # Windows explorer / taskbar exe icon
+    target_sources(Selt_Gui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc")
+endif()
 set_source_files_properties(${SELT_QRC} PROPERTIES SKIP_AUTORCC OFF)
 set_target_properties(Selt_Gui PROPERTIES
     AUTORCC ON
@@ -382,6 +386,35 @@ if(SELT_HAS_OPENCV)
     target_link_libraries(Selt_Gui_roi_applier_tests PRIVATE Qt::Core Qt::Gui Qt::Test SeltFoundation ${OpenCV_LIBS})
     add_test(NAME Selt_Gui_roi_applier_tests COMMAND Selt_Gui_roi_applier_tests)
     selt_configure_test_runtime(Selt_Gui_roi_applier_tests)
+
+    qt_add_executable(Selt_Gui_blob_find_circle_tests
+        tests/test_blob_find_circle_optimize.cpp
+        ${SELT_VISION_DATA_SOURCES}
+        ${SELT_VISION_ALGORITHM_SOURCES}
+    )
+    target_compile_definitions(Selt_Gui_blob_find_circle_tests PRIVATE SELT_HAS_OPENCV=1)
+    target_include_directories(Selt_Gui_blob_find_circle_tests PRIVATE ${CMAKE_SOURCE_DIR} ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(Selt_Gui_blob_find_circle_tests PRIVATE Qt::Core Qt::Gui Qt::Test SeltFoundation ${OpenCV_LIBS})
+    add_test(NAME Selt_Gui_blob_find_circle_tests COMMAND Selt_Gui_blob_find_circle_tests)
+    selt_configure_test_runtime(Selt_Gui_blob_find_circle_tests)
+
+    qt_add_executable(Selt_Gui_interactive_geometry_tests
+        tests/test_interactive_geometry_coverage.cpp
+    )
+    target_compile_definitions(Selt_Gui_interactive_geometry_tests PRIVATE SELT_HAS_OPENCV=1)
+    target_include_directories(Selt_Gui_interactive_geometry_tests PRIVATE ${CMAKE_SOURCE_DIR} ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(Selt_Gui_interactive_geometry_tests PRIVATE SeltVisionRuntime Qt::Test)
+    add_test(NAME Selt_Gui_interactive_geometry_tests COMMAND Selt_Gui_interactive_geometry_tests)
+    selt_configure_test_runtime(Selt_Gui_interactive_geometry_tests)
+
+    qt_add_executable(Selt_Gui_industrial_convergence_tests
+        tests/test_industrial_convergence.cpp
+    )
+    target_compile_definitions(Selt_Gui_industrial_convergence_tests PRIVATE SELT_HAS_OPENCV=1)
+    target_include_directories(Selt_Gui_industrial_convergence_tests PRIVATE ${CMAKE_SOURCE_DIR} ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(Selt_Gui_industrial_convergence_tests PRIVATE SeltVisionRuntime Qt::Test)
+    add_test(NAME Selt_Gui_industrial_convergence_tests COMMAND Selt_Gui_industrial_convergence_tests)
+    selt_configure_test_runtime(Selt_Gui_industrial_convergence_tests)
 
     qt_add_executable(Selt_Gui_builtin_executor_tests
         tests/test_builtin_executors.cpp

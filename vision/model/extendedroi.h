@@ -22,6 +22,8 @@ enum class RoiShapeType {
 struct ExtendedRoi
 {
     QString id;
+    /// Fixture / image coordinate space this ROI is expressed in (empty = source image).
+    QString coordinateSpaceId;
     RoiShapeType shape{RoiShapeType::Rectangle};
     QRectF rect;
     QPointF center;
@@ -153,6 +155,7 @@ inline QJsonObject ExtendedRoi::toJson() const
 {
     QJsonObject obj{
         {QStringLiteral("id"), id},
+        {QStringLiteral("coordinateSpaceId"), coordinateSpaceId},
         {QStringLiteral("shape"), static_cast<int>(shape)},
         {QStringLiteral("x"), rect.x()},
         {QStringLiteral("y"), rect.y()},
@@ -179,6 +182,7 @@ inline ExtendedRoi ExtendedRoi::fromJson(const QJsonObject &obj)
 {
     ExtendedRoi r;
     r.id = obj.value(QStringLiteral("id")).toString();
+    r.coordinateSpaceId = obj.value(QStringLiteral("coordinateSpaceId")).toString();
     r.shape = static_cast<RoiShapeType>(obj.value(QStringLiteral("shape")).toInt());
     r.rect = QRectF(obj.value(QStringLiteral("x")).toDouble(),
                     obj.value(QStringLiteral("y")).toDouble(),

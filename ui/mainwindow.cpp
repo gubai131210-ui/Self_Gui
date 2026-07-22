@@ -912,6 +912,7 @@ void MainWindow::setupConnections()
         if (m_propertyPanel->isApplyingChanges())
             return;
         m_propertyPanel->setSelectedNode(node.id);
+        syncInteractiveGeometry(node.id);
         if (m_nodeInspectorDialog && m_nodeInspectorDialog->nodeId() == node.id)
             m_nodeInspectorDialog->refresh();
 #if SELT_HAS_OPENCV
@@ -923,6 +924,10 @@ void MainWindow::setupConnections()
             this, &MainWindow::onVisionOutputNodeChanged);
     connect(m_resultPreview, &ImagePreviewWidget::roiChanged,
             this, &MainWindow::onResultRoiChanged);
+    connect(m_resultPreview, &ImagePreviewWidget::extendedRoiChanged,
+            this, &MainWindow::onResultExtendedRoiChanged);
+    connect(m_resultPreview, &ImagePreviewWidget::interactiveGeometryChanged,
+            this, &MainWindow::onInteractiveGeometryChanged);
     connect(m_resultPreview, &ImagePreviewWidget::teachTemplateRequested,
             this, &MainWindow::onTeachTemplateRequested);
     connect(m_runController, &Selt::RunController::runFinished,
@@ -1539,6 +1544,7 @@ void MainWindow::onSelectionNodeChanged(const QString &nodeId)
     m_propertyPanel->setProperty("currentNodeId", nodeId);
     m_propertyPanel->setSelectedNode(nodeId);
 #if SELT_HAS_OPENCV
+    syncInteractiveGeometry(nodeId);
     syncSelectedModuleStatus(nodeId);
     if (m_helpLabel) {
         if (m_document && m_document->hasNode(nodeId)) {
@@ -1558,11 +1564,48 @@ void MainWindow::onSelectionNodeChanged(const QString &nodeId)
         refreshResultPreview(nodeId);
     } else if (m_document && m_document->hasNode(nodeId)) {
         const NodeModel node = m_document->node(nodeId);
-        const RoiRect roi = RoiRect::fromJson(node.parameters.value(QStringLiteral("roi")).toObject());
-        m_resultPreview->setRoi(roi);
+        if (node.parameters.contains(QStringLiteral("extendedRoi")))
+            m_resultPreview->setExtendedRoi(
+                Selt::ExtendedRoi::fromJson(
+                    node.parameters.value(QStringLiteral("extendedRoi")).toObject()));
+        else
+            m_resultPreview->setRoi(
+                RoiRect::fromJson(node.parameters.value(QStringLiteral("roi")).toObject()));
     }
 #endif
 }
+
+#if SELT_HAS_OPENCV
+void MainWindow::syncInteractiveGeometry(const QString &nodeId)
+{
+    if (!m_resultPreview)
+        return;
+    if (!m_document || nodeId.isEmpty() || !m_document->hasNode(nodeId)) {
+        m_resultPreview->clearInteractiveGeometry();
+        m_resultPreview->setRoiEditEnabled(false);
+        return;
+    }
+    const NodeModel node = m_document->node(nodeId);
+    const ModuleDescriptor specDescriptor = VisionNodeRegistry::descriptor(node.type);
+    const Selt::InteractiveGeometrySpec &spec = specDescriptor.interactiveGeometry;
+
+    const bool hasRoiParam = node.parameters.contains(QStringLiteral("roi"))
+        || node.parameters.contains(QStringLiteral("extendedRoi"))
+        || spec.supportsRoi
+        || spec.kind == Selt::GeometryKind::Roi
+        || spec.kind == Selt::GeometryKind::TemplateRoi;
+    m_resultPreview->setRoiEditEnabled(hasRoiParam);
+
+    if (!Selt::isSpatialTeachable(spec) && !hasRoiParam) {
+        m_resultPreview->clearInteractiveGeometry();
+        return;
+    }
+    if (Selt::isSpatialTeachable(spec))
+        m_resultPreview->setInteractiveGeometry(spec, node.parameters);
+    else
+        m_resultPreview->clearInteractiveGeometry();
+}
+#endif
 
 void MainWindow::onPaletteActivated(const QString &type)
 {
@@ -1902,16 +1945,24 @@ void MainWindow::refreshResultPreview(const QString &nodeId)
     if (m_document && m_document->hasNode(selectedId)) {
         const NodeModel node = m_document->node(selectedId);
         previewRoi = RoiRect::fromJson(node.parameters.value(QStringLiteral("roi")).toObject());
-        m_resultPreview->setRoi(previewRoi);
-        m_resultPreview->setRoiEditEnabled(node.parameters.contains(QStringLiteral("roi")));
+        if (node.parameters.contains(QStringLiteral("extendedRoi"))) {
+            m_resultPreview->setExtendedRoi(Selt::ExtendedRoi::fromJson(
+                node.parameters.value(QStringLiteral("extendedRoi")).toObject()));
+        } else {
+            m_resultPreview->setRoi(previewRoi);
+        }
+        const ModuleDescriptor desc = VisionNodeRegistry::descriptor(node.type);
+        const bool roiEditable = node.parameters.contains(QStringLiteral("roi"))
+            || node.parameters.contains(QStringLiteral("extendedRoi"))
+            || desc.interactiveGeometry.supportsRoi
+            || desc.interactiveGeometry.kind == Selt::GeometryKind::Roi
+            || desc.interactiveGeometry.kind == Selt::GeometryKind::TemplateRoi;
+        m_resultPreview->setRoiEditEnabled(roiEditable);
     }
     if (previewRoi.enabled && previewRoi.rect.isValid() && !originalLayer.isNull()) {
         const QRect box = previewRoi.rect.toRect().intersected(originalLayer.rect());
         if (box.isValid())
             roiLayer = originalLayer.copy(box);
-    } else if (!image.isEmpty() && !nodeId.isEmpty()) {
-        // 若节点输出即 ROI 裁剪结果，用结果图作为 ROI 层参考。
-        roiLayer = image.toQImage();
     }
     m_resultPreview->setPreviewLayers(originalLayer, roiLayer, debugImage);
 }
@@ -1951,6 +2002,9 @@ void MainWindow::updateNodeRunStatus(const QString &nodeId, ModuleStatus status)
         break;
     case ModuleStatus::Success:
         item->setRunStatus(NodeRunVisualStatus::Success);
+        break;
+    case ModuleStatus::SuccessWithWarning:
+        item->setRunStatus(NodeRunVisualStatus::Warning);
         break;
     case ModuleStatus::Failed:
         item->setRunStatus(NodeRunVisualStatus::Failed);
@@ -2054,10 +2108,60 @@ void MainWindow::onResultRoiChanged(const RoiRect &roi)
     const QString nodeId = m_propertyPanel->property("currentNodeId").toString();
     if (nodeId.isEmpty() || !m_document || !m_document->hasNode(nodeId))
         return;
+    const Selt::ExtendedRoi extended = m_resultPreview->currentExtendedRoi();
+    if (extended.isValid() && extended.shape != Selt::RoiShapeType::Rectangle)
+        return;
     const NodeModel node = m_document->node(nodeId);
     if (!node.parameters.contains(QStringLiteral("roi")))
         return;
     m_propertyPanel->applyRoiParameter(QStringLiteral("roi"), roi.toJson());
+}
+
+void MainWindow::onResultExtendedRoiChanged(const Selt::ExtendedRoi &roi)
+{
+    const QString nodeId = m_propertyPanel->property("currentNodeId").toString();
+    if (nodeId.isEmpty() || !m_document || !m_document->hasNode(nodeId))
+        return;
+    // Prefer extendedRoi as canonical shape storage; keep legacy roi for compatibility.
+    m_propertyPanel->applyRoiParameter(QStringLiteral("extendedRoi"), roi.toJson());
+    m_propertyPanel->applyRoiParameter(QStringLiteral("roi"), roi.toLegacyRect().toJson());
+}
+
+void MainWindow::onInteractiveGeometryChanged(const QJsonObject &parameters)
+{
+    const QString nodeId = m_propertyPanel->property("currentNodeId").toString();
+    if (nodeId.isEmpty() || !m_document || !m_document->hasNode(nodeId))
+        return;
+
+    NodeModel node = m_document->node(nodeId);
+    const ModuleDescriptor specDescriptor = VisionNodeRegistry::descriptor(node.type);
+    const Selt::InteractiveGeometrySpec &spec = specDescriptor.interactiveGeometry;
+    if (!spec.editable && !spec.supportsRoi)
+        return;
+
+    QStringList keys = spec.parameterKeys;
+    // Teaching may also write transient pick / secondary geometry keys.
+    for (auto it = parameters.begin(); it != parameters.end(); ++it) {
+        if (!keys.contains(it.key())
+            && (it.key() == QLatin1String("pickX") || it.key() == QLatin1String("pickY")
+                || it.key().startsWith(QLatin1String("x"))
+                || it.key().startsWith(QLatin1String("y"))
+                || it.key() == QLatin1String("cx") || it.key() == QLatin1String("cy")
+                || it.key() == QLatin1String("radius") || it.key() == QLatin1String("angle")
+                || it.key() == QLatin1String("length") || it.key() == QLatin1String("width")
+                || it.key() == QLatin1String("refX") || it.key() == QLatin1String("refY"))) {
+            keys.append(it.key());
+        }
+    }
+    for (const QString &key : keys) {
+        if (!parameters.contains(key))
+            continue;
+        node.parameters.insert(key, parameters.value(key));
+        // Canvas teach is an explicit user value (not Auto).
+        node.parameters.insert(QStringLiteral("_mode_") + key, QStringLiteral("user"));
+    }
+    m_document->updateNode(node);
+    m_propertyPanel->setSelectedNode(nodeId);
 }
 
 void MainWindow::onTeachTemplateRequested()

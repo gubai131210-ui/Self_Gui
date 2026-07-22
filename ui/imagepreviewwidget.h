@@ -2,10 +2,12 @@
 #define IMAGEPREVIEWWIDGET_H
 
 #include "vision/model/extendedroi.h"
+#include "vision/model/interactivegeometry.h"
 #include "vision/model/overlayitems.h"
 #include "vision/model/roi.h"
 
 #include <QImage>
+#include <QJsonObject>
 #include <QPoint>
 #include <QSet>
 #include <QWidget>
@@ -64,10 +66,17 @@ public:
     /// When true, resize/refit keeps the image fitting the widget.
     void setAutoFitEnabled(bool enabled);
     bool autoFitEnabled() const { return m_autoFit; }
+    /// Hide ROI contour overlay (e.g. when previewing cropped ROI content).
+    void setRoiOverlayHidden(bool hidden);
+    bool roiOverlayHidden() const { return m_hideRoiOverlay; }
+    void setInteractiveGeometry(const Selt::InteractiveGeometrySpec &spec,
+                                const QJsonObject &parameters);
+    void clearInteractiveGeometry();
 
 signals:
     void roiChanged(const RoiRect &roi);
     void extendedRoiChanged(const Selt::ExtendedRoi &roi);
+    void interactiveGeometryChanged(const QJsonObject &parameters);
     void viewChanged();
     void cursorInfoChanged(const QPointF &imagePos, const QColor &pixel, bool valid);
 
@@ -90,6 +99,9 @@ private:
     void emitRoiIfChanged();
     void drawRoiShape(QPainter &painter) const;
     void drawHandles(QPainter &painter) const;
+    void drawInteractiveGeometry(QPainter &painter) const;
+    bool hitInteractiveGeometry(const QPoint &pos);
+    void updateInteractiveGeometry(const QPoint &pos);
     void applyBoundingBoxToShape(const QRectF &box);
     Selt::RoiShapeType shapeForTool(RoiTool tool) const;
 
@@ -103,6 +115,7 @@ private:
     bool m_panning{false};
     bool m_drawingRoi{false};
     bool m_editingRoi{false};
+    bool m_editingGeometry{false};
     bool m_polygonDrawing{false};
     bool m_roiEditEnabled{true};
     RoiHandle m_activeHandle{RoiHandle::None};
@@ -112,6 +125,11 @@ private:
     QRectF m_roiAtEditStart;
     bool m_checkerboard{false};
     bool m_autoFit{true};
+    bool m_hideRoiOverlay{false};
+    Selt::InteractiveGeometrySpec m_geometrySpec;
+    QJsonObject m_geometryParameters;
+    int m_geometryHandle{-1};
+    QPointF m_geometryStart;
 };
 
 class ImagePreviewWidget : public QWidget
@@ -125,6 +143,9 @@ public:
     void setOverlays(const OverlayList &overlays);
     void setRoi(const RoiRect &roi);
     void setExtendedRoi(const Selt::ExtendedRoi &roi);
+    void setInteractiveGeometry(const Selt::InteractiveGeometrySpec &spec,
+                                const QJsonObject &parameters);
+    void clearInteractiveGeometry();
     void clearImage();
     void setRoiEditEnabled(bool enabled);
     void setDiagnosisText(const QString &text);
@@ -141,6 +162,7 @@ public:
 signals:
     void roiChanged(const RoiRect &roi);
     void extendedRoiChanged(const Selt::ExtendedRoi &roi);
+    void interactiveGeometryChanged(const QJsonObject &parameters);
     void teachTemplateRequested();
 
 private:

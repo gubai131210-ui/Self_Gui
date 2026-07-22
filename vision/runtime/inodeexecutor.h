@@ -35,6 +35,10 @@ struct ExecutionResult
     MeasurementResult measurement;
     QString errorMessage;
     QString diagnosticCode;
+    /// Industrial outcome details (optional; empty when unused).
+    QString failureStage;
+    double qualityScore{1.0};
+    QJsonObject autoSnapshot;
     qint64 elapsedMs{0};
 };
 

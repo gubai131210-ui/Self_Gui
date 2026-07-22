@@ -995,7 +995,7 @@ bool OcrAlgorithm::apply(const VisionImage &input,
     const QString rawText = textPtr ? QString::fromUtf8(textPtr).trimmed() : QString();
     delete[] textPtr;
     const int conf = api.MeanTextConf();
-    const double confidence = qBound(0.0, 1.0, double(conf) / 100.0);
+    const double confidence = qBound(0.0, double(conf) / 100.0, 1.0);
     out.attemptCount = 1;
     out.strategyUsed = options.binarize ? QStringLiteral("ocr_binarize") : QStringLiteral("ocr_gray");
 

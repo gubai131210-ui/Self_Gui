@@ -57,6 +57,8 @@ inline QString subpixelRefine() { return QStringLiteral("vision.subpixelRefine")
 inline QString angleMeasure() { return QStringLiteral("vision.angleMeasure"); }
 inline QString parallelDistance() { return QStringLiteral("vision.parallelDistance"); }
 inline QString caliperMeasure() { return QStringLiteral("vision.caliperMeasure"); }
+inline QString findLine() { return QStringLiteral("vision.findLine"); }
+inline QString findCircle() { return QStringLiteral("vision.findCircle"); }
 inline QString fitCircle() { return QStringLiteral("vision.fitCircle"); }
 inline QString fitLine() { return QStringLiteral("vision.fitLine"); }
 inline QString measureStatistics() { return QStringLiteral("vision.measureStatistics"); }

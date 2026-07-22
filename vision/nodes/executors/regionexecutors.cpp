@@ -1,10 +1,12 @@
 #include "vision/algorithms/regionalgorithms.h"
 #include "vision/model/contourdata.h"
+#include "vision/model/operatoroutcome.h"
 #include "vision/nodes/imageexecutorhelpers.h"
 #include "vision/registry/visionnodeids.h"
 #include "vision/runtime/nodeexecutorregistry.h"
 
 #include <QElapsedTimer>
+#include <QLineF>
 #include <memory>
 
 namespace Selt {
@@ -144,27 +146,68 @@ public:
     {
         QElapsedTimer t;
         t.start();
-        VisionImage input = applyRoiFromRequest(request.inputs.value(QStringLiteral("image")).toImage(),
-                                                request.parameters);
+        QString err;
+        QString code;
+        QPointF origin;
+        VisionImage input = requireImageWithRoi(request, &origin, &err, &code);
+        if (input.isEmpty())
+            return failResult(err, code.isEmpty() ? DiagnosticCodes::imageEmpty() : code, t.elapsed());
         RegionData region;
         QVector<double> scores;
         VisionImage overlay;
-        QString err;
         int selectedIndex = -1;
+        int unfiltered = 0;
         BlobAnalyzeAlgorithm::Options opts;
-        opts.minArea = resolveRealInput(request, QStringLiteral("minArea"), 50.0);
-        opts.maxArea = resolveRealInput(request, QStringLiteral("maxArea"), 1e9);
+        opts.minArea = resolveRealInput(request, QStringLiteral("minArea"), 0.0);
+        opts.maxArea = resolveRealInput(request, QStringLiteral("maxArea"), 0.0);
         opts.minCircularity = resolveRealInput(request, QStringLiteral("minCircularity"), 0.0);
+        opts.maxCircularity = resolveRealInput(request, QStringLiteral("maxCircularity"), 1.0);
         opts.minAspectRatio = resolveRealInput(request, QStringLiteral("minAspectRatio"), 0.0);
-        opts.maxAspectRatio = resolveRealInput(request, QStringLiteral("maxAspectRatio"), 1e9);
+        opts.maxAspectRatio = resolveRealInput(request, QStringLiteral("maxAspectRatio"), 0.0);
         opts.minExtent = resolveRealInput(request, QStringLiteral("minExtent"), 0.0);
         opts.minSolidity = resolveRealInput(request, QStringLiteral("minSolidity"), 0.0);
+        opts.minPerimeter = resolveRealInput(request, QStringLiteral("minPerimeter"), 0.0);
+        opts.maxPerimeter = resolveRealInput(request, QStringLiteral("maxPerimeter"), 0.0);
+        opts.minElongation = resolveRealInput(request, QStringLiteral("minElongation"), 1.0);
+        opts.maxElongation = resolveRealInput(request, QStringLiteral("maxElongation"), 0.0);
+        opts.minCx = resolveRealInput(request, QStringLiteral("minCx"), -1e9);
+        opts.maxCx = resolveRealInput(request, QStringLiteral("maxCx"), 1e9);
+        opts.minCy = resolveRealInput(request, QStringLiteral("minCy"), -1e9);
+        opts.maxCy = resolveRealInput(request, QStringLiteral("maxCy"), 1e9);
+        opts.minWidth = resolveRealInput(request, QStringLiteral("minWidth"), 0.0);
+        opts.maxWidth = resolveRealInput(request, QStringLiteral("maxWidth"), 0.0);
+        opts.minHeight = resolveRealInput(request, QStringLiteral("minHeight"), 0.0);
+        opts.maxHeight = resolveRealInput(request, QStringLiteral("maxHeight"), 0.0);
         opts.maxCount = resolveIntParam(request, QStringLiteral("maxCount"), 100);
         opts.sortBy = resolveStringParam(request, QStringLiteral("sortBy"), QStringLiteral("area"));
         opts.selectIndex = resolveIntParam(request, QStringLiteral("selectIndex"), 0);
+        // Canvas ContourPick writes pickX/pickY → choose nearest blob centroid after apply.
+        opts.thresholdMode =
+            resolveStringParam(request, QStringLiteral("thresholdMode"), QStringLiteral("auto"));
+        opts.polarity = resolveStringParam(request, QStringLiteral("polarity"), QStringLiteral("any"));
+        opts.manualThreshold = resolveIntParam(request, QStringLiteral("threshold"), 128);
+        opts.originOffset = origin;
         const bool requireTarget = resolveBoolParam(request, QStringLiteral("requireTarget"), false);
-        if (!BlobAnalyzeAlgorithm::apply(input, opts, region, scores, overlay, &selectedIndex, &err))
+        if (!BlobAnalyzeAlgorithm::apply(input, opts, region, scores, overlay, &selectedIndex,
+                                         &unfiltered, &err))
             return failResult(err, DiagnosticCodes::noTarget(), t.elapsed());
+
+        if (request.parameters.contains(QStringLiteral("pickX"))
+            && request.parameters.contains(QStringLiteral("pickY"))
+            && !region.regions.isEmpty()) {
+            const QPointF pick(request.parameters.value(QStringLiteral("pickX")).toDouble(),
+                               request.parameters.value(QStringLiteral("pickY")).toDouble());
+            int best = 0;
+            double bestDist = 1e100;
+            for (int i = 0; i < region.regions.size(); ++i) {
+                const double d = QLineF(pick, region.regions.at(i).centroid).length();
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = i;
+                }
+            }
+            selectedIndex = best;
+        }
         if (requireTarget && selectedIndex < 0) {
             return failResult(region.regions.isEmpty()
                                   ? QStringLiteral("未找到符合条件的 Blob 目标")
@@ -176,6 +219,7 @@ public:
         r.outputs.insert(QStringLiteral("region"), DataValue(region));
         r.outputs.insert(QStringLiteral("count"), DataValue(int(region.regions.size())));
         r.outputs.insert(QStringLiteral("candidateCount"), DataValue(int(region.regions.size())));
+        r.outputs.insert(QStringLiteral("unfilteredCount"), DataValue(unfiltered));
         r.outputs.insert(QStringLiteral("selectedIndex"), DataValue(selectedIndex));
         if (selectedIndex >= 0 && selectedIndex < region.regions.size()) {
             const RegionStats &picked = region.regions.at(selectedIndex);
@@ -185,7 +229,6 @@ public:
             r.outputs.insert(QStringLiteral("confidence"),
                              DataValue(selectedIndex < scores.size() ? scores.at(selectedIndex) : 1.0));
         } else {
-            // Soft success for count-style flows: emit stable zeros when no primary target.
             r.outputs.insert(QStringLiteral("center"), DataValue(QPointF(0.0, 0.0)));
             r.outputs.insert(QStringLiteral("area"), DataValue(0.0));
             r.outputs.insert(QStringLiteral("circularity"), DataValue(0.0));

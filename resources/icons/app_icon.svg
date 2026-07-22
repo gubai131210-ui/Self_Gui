@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <!-- Selt industrial vision: dark panel + orange ROI/measure accent -->
+  <rect x="16" y="16" width="224" height="224" rx="44" fill="#282B30"/>
+  <rect x="16" y="16" width="224" height="224" rx="44" stroke="#3E424A" stroke-width="4"/>
+
+  <!-- Image frame -->
+  <rect x="52" y="58" width="152" height="112" rx="14" fill="#202226" stroke="#6E737D" stroke-width="6"/>
+
+  <!-- ROI rectangle (accent) -->
+  <rect x="78" y="78" width="78" height="58" rx="6" stroke="#FF8C00" stroke-width="8" fill="none"/>
+  <!-- ROI corner ticks -->
+  <path d="M78 94V78h16M140 78h16v16M78 120v16h16M156 136v-16h-16" stroke="#FF8C00" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Measurement line + endpoints -->
+  <line x1="92" y1="150" x2="178" y2="98" stroke="#4096E6" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="92" cy="150" r="7" fill="#38B45A"/>
+  <circle cx="178" cy="98" r="7" fill="#38B45A"/>
+
+  <!-- Flow nodes (pipeline metaphor) -->
+  <circle cx="68" cy="198" r="12" fill="#FF8C00"/>
+  <circle cx="128" cy="198" r="12" fill="#FF8C00"/>
+  <circle cx="188" cy="198" r="12" fill="#FF8C00"/>
+  <line x1="80" y1="198" x2="116" y2="198" stroke="#E6E8EB" stroke-width="6" stroke-linecap="round"/>
+  <line x1="140" y1="198" x2="176" y2="198" stroke="#E6E8EB" stroke-width="6" stroke-linecap="round"/>
+</svg>

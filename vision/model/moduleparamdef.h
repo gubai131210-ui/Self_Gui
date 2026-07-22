@@ -25,6 +25,13 @@ struct ModuleParamOption
     QString label;
 };
 
+/// How an unset/empty parameter should be interpreted at runtime.
+enum class ModuleParamAutoPolicy {
+    None,       ///< Always use stored / default value.
+    Auto,       ///< Unset/sentinel resolves via AutoParameterResolver.
+    Unlimited   ///< 0 / negative means no upper bound (filters).
+};
+
 struct ModuleParamDef
 {
     QString key;
@@ -41,6 +48,10 @@ struct ModuleParamDef
     /// Optional inspector group title (e.g. "采样", "阈值", "ROI").
     QString group;
     int displayOrder{0};
+    /// When Auto, inspector may show "Auto/不限" and omit writing until user edits.
+    ModuleParamAutoPolicy autoPolicy{ModuleParamAutoPolicy::None};
+    /// Optional display placeholder for Auto/Unset (e.g. "Auto", "不限").
+    QString autoPlaceholder;
 
     QJsonValue defaultJsonValue() const
     {

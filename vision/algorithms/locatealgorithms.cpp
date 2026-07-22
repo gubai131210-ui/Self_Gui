@@ -124,7 +124,7 @@ bool HoughLinesAlgorithm::apply(const VisionImage &input,
                 linesOut.append(line);
             }
             for (LocateLine2D &line : linesOut)
-                line.confidence = qBound(0.0, 1.0, lineLength(line) / maxLen);
+                line.confidence = qBound(0.0, lineLength(line) / maxLen, 1.0);
 
             if (options.sortBy == QLatin1String("score")) {
                 std::sort(linesOut.begin(), linesOut.end(),
@@ -209,7 +209,7 @@ bool HoughCirclesAlgorithm::apply(const VisionImage &input,
             if (!circlesOut.isEmpty()) {
                 const double maxR = qMax(1.0, circlesOut.first().radius);
                 for (LocateCircle2D &c : circlesOut)
-                    c.confidence = qBound(0.0, 1.0, c.radius / maxR);
+                    c.confidence = qBound(0.0, c.radius / maxR, 1.0);
             }
 
             for (const LocateCircle2D &c : circlesOut) {
@@ -373,7 +373,7 @@ bool FeatureMatchAlgorithm::apply(const VisionImage &image,
             inlierCount = used;
             const double meanDist = sumDist / qMax(1, used);
             const double inlierRatio = double(used) / qMax<size_t>(1, good.size());
-            score = qBound(0.0, 1.0, (1.0 - meanDist / 256.0) * 0.5 + inlierRatio * 0.5);
+            score = qBound(0.0, (1.0 - meanDist / 256.0) * 0.5 + inlierRatio * 0.5, 1.0);
             if (inlierRatio < options.minInlierRatio && used < options.minMatches)
                 score = qMin(score, 0.4);
 

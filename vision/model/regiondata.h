@@ -17,7 +17,9 @@ struct RegionStats
     int label{0};
     QPointF centroid;
     double area{0.0};
+    double perimeter{0.0};
     double circularity{0.0};
+    double elongation{0.0}; // major/minor principal inertia (>=1)
     double aspectRatio{1.0};
     double extent{0.0};
     double solidity{0.0};
@@ -32,7 +34,9 @@ struct RegionStats
             {QStringLiteral("cx"), centroid.x()},
             {QStringLiteral("cy"), centroid.y()},
             {QStringLiteral("area"), area},
+            {QStringLiteral("perimeter"), perimeter},
             {QStringLiteral("circularity"), circularity},
+            {QStringLiteral("elongation"), elongation},
             {QStringLiteral("aspectRatio"), aspectRatio},
             {QStringLiteral("extent"), extent},
             {QStringLiteral("solidity"), solidity},
@@ -52,7 +56,9 @@ struct RegionStats
         s.centroid = QPointF(obj.value(QStringLiteral("cx")).toDouble(),
                              obj.value(QStringLiteral("cy")).toDouble());
         s.area = obj.value(QStringLiteral("area")).toDouble();
+        s.perimeter = obj.value(QStringLiteral("perimeter")).toDouble();
         s.circularity = obj.value(QStringLiteral("circularity")).toDouble();
+        s.elongation = obj.value(QStringLiteral("elongation")).toDouble(1.0);
         s.aspectRatio = obj.value(QStringLiteral("aspectRatio")).toDouble(1.0);
         s.extent = obj.value(QStringLiteral("extent")).toDouble();
         s.solidity = obj.value(QStringLiteral("solidity")).toDouble();

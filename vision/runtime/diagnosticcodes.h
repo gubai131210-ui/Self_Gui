@@ -38,6 +38,12 @@ inline QString operatorNotImplemented() { return QStringLiteral("operator_not_im
 inline QString lowConfidence() { return QStringLiteral("low_confidence"); }
 /// OCR language pack (*.traineddata) missing.
 inline QString languagePackMissing() { return QStringLiteral("language_pack_missing"); }
+/// Operator exceeded Safety time budget.
+inline QString timeout() { return QStringLiteral("timeout"); }
+/// Candidate rejected by quality gates (residual/coverage/stability).
+inline QString rejectedByQuality() { return QStringLiteral("rejected_by_quality"); }
+/// Geometry teach missing or invalid for spatial operators.
+inline QString invalidGeometry() { return QStringLiteral("invalid_geometry"); }
 /// Live frame / camera grab failed or input source closed.
 inline QString deviceGrabFailed() { return QStringLiteral("device_grab_failed"); }
 /// Required graph input missing at publish or run preflight.

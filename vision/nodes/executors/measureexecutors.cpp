@@ -1,11 +1,15 @@
 #include "vision/algorithms/caliperalgorithm.h"
+#include "vision/algorithms/metrology/edgeprobe.h"
 #include "vision/model/measurementdefinition.h"
+#include "vision/model/operatoroutcome.h"
+#include "vision/model/overlayitems.h"
 #include "vision/nodes/imageexecutorhelpers.h"
 #include "vision/registry/visionnodeids.h"
 #include "vision/runtime/nodeexecutorregistry.h"
 #include "vision/runtime/resultsink.h"
 
 #include <QElapsedTimer>
+#include <QJsonDocument>
 #include <QLineF>
 #include <QtMath>
 #include <cmath>
@@ -108,8 +112,17 @@ public:
             ? request.inputs.value(QStringLiteral("center")).toPoint2D()
             : QPointF(resolveRealInput(request, QStringLiteral("cx"), 0.0),
                       resolveRealInput(request, QStringLiteral("cy"), 0.0));
-        const double length = resolveRealInput(request, QStringLiteral("length"), 80.0);
-        const double width = resolveRealInput(request, QStringLiteral("width"), 8.0);
+        const bool hasTeach =
+            request.inputs.contains(QStringLiteral("center"))
+            || (request.parameters.contains(QStringLiteral("cx"))
+                && request.parameters.contains(QStringLiteral("cy")));
+        if (!hasTeach) {
+            return failResult(QStringLiteral("请在图像上示教卡尺中心/条带"),
+                              DiagnosticCodes::invalidParameter(), t.elapsed());
+        }
+        const double length = resolveAutoReal(request, QStringLiteral("length"), 80.0,
+                                              qMin(input.width(), input.height()) * 0.2);
+        const double width = resolveAutoReal(request, QStringLiteral("width"), 8.0, 8.0);
         if (length < 2.0 || width < 1.0)
             return failResult(QStringLiteral("卡尺长度/宽度无效"),
                               DiagnosticCodes::invalidParameter(), t.elapsed());
@@ -119,12 +132,15 @@ public:
         double confidence = 0.0;
         VisionImage overlay;
         CaliperOptions opts;
-        opts.sampleStep = resolveRealInput(request, QStringLiteral("sampleStep"), 1.0);
-        opts.smoothSigma = resolveRealInput(request, QStringLiteral("smoothSigma"), 0.0);
-        opts.polarity = resolveStringParam(request, QStringLiteral("polarity"), QStringLiteral("any"));
-        opts.gradientThreshold = resolveRealInput(request, QStringLiteral("gradientThreshold"), 1.0);
-        opts.minEdgeGap = resolveRealInput(request, QStringLiteral("minEdgeGap"), 4.0);
-        opts.secondPeakRatio = resolveRealInput(request, QStringLiteral("secondPeakRatio"), 0.35);
+        opts.sampleStep = resolveAutoReal(request, QStringLiteral("sampleStep"), 1.0, 1.0);
+        opts.smoothSigma = resolveAutoReal(request, QStringLiteral("smoothSigma"), 0.0, 0.8);
+        opts.polarity = resolveAutoStringParam(request, QStringLiteral("polarity"),
+                                               QStringLiteral("any"), QStringLiteral("any"));
+        opts.gradientThreshold =
+            resolveAutoReal(request, QStringLiteral("gradientThreshold"), 1.0, 0.5);
+        opts.minEdgeGap = resolveAutoReal(request, QStringLiteral("minEdgeGap"), 4.0, 4.0);
+        opts.secondPeakRatio =
+            resolveAutoReal(request, QStringLiteral("secondPeakRatio"), 0.35, 0.35);
         if (!CaliperAlgorithm::sample(input, center,
                                       resolveRealInput(request, QStringLiteral("angle"), 0.0),
                                       length, width, opts, edges, distance, confidence, overlay, &err)) {
@@ -170,6 +186,338 @@ public:
         else if (!diagCode.isEmpty())
             r.diagnosticCode = diagCode;
         r.elapsedMs = t.elapsed();
+        return r;
+    }
+};
+
+class FindLineByCalipersExecutor : public INodeExecutor
+{
+public:
+    QString typeId() const override { return VisionNodeIds::findLine(); }
+    ExecutionResult execute(const ExecutionRequest &request, ExecutionContext &context) override
+    {
+        QElapsedTimer t;
+        t.start();
+        QString err;
+        QString code;
+        VisionImage input = requireImageWithRoi(request, &err, &code);
+        if (input.isEmpty())
+            return failResult(err, code.isEmpty() ? DiagnosticCodes::imageEmpty() : code, t.elapsed());
+
+        FindLineByCalipersOptions opts;
+        const QString searchMode =
+            resolveAutoStringParam(request, QStringLiteral("searchMode"),
+                                   QStringLiteral("auto"), QStringLiteral("auto"));
+        // Missing teach geometry: do not invent a fake segment.
+        const bool hasTeach =
+            request.parameters.contains(QStringLiteral("x0"))
+            && request.parameters.contains(QStringLiteral("y0"))
+            && request.parameters.contains(QStringLiteral("x1"))
+            && request.parameters.contains(QStringLiteral("y1"));
+        if (!hasTeach) {
+            return failResult(QStringLiteral("请在图像上示教期望线段搜索区域"),
+                              DiagnosticCodes::invalidParameter(), t.elapsed());
+        }
+        const QPointF p0(resolveRealInput(request, QStringLiteral("x0"), 0.0),
+                         resolveRealInput(request, QStringLiteral("y0"), 0.0));
+        const QPointF p1(resolveRealInput(request, QStringLiteral("x1"), 0.0),
+                         resolveRealInput(request, QStringLiteral("y1"), 0.0));
+        const double expectedLen = QLineF(p0, p1).length();
+        if (!(expectedLen > 1.0)) {
+            return failResult(QStringLiteral("期望线段长度无效，请重新示教"),
+                              DiagnosticCodes::degenerateGeometry(), t.elapsed());
+        }
+
+        opts.numCalipers = resolveAutoInt(request, QStringLiteral("numCalipers"), 8,
+                                          autoCaliperCountForLine(expectedLen));
+        opts.searchLength = resolveAutoReal(request, QStringLiteral("searchLength"), 60.0,
+                                            autoSearchLength(qMax(20.0, expectedLen * 0.15)));
+        opts.projectionLength = resolveAutoReal(request, QStringLiteral("projectionLength"),
+                                                10.0, qBound(4.0, expectedLen * 0.05, 24.0));
+        opts.numToIgnore = resolveAutoInt(request, QStringLiteral("numToIgnore"), -1,
+                                          qMax(1, int(std::lround(opts.numCalipers * 0.45))));
+        opts.caliperOpts.polarity =
+            resolveAutoStringParam(request, QStringLiteral("polarity"),
+                                   QStringLiteral("any"), QStringLiteral("any"));
+        opts.caliperOpts.gradientThreshold =
+            resolveAutoReal(request, QStringLiteral("gradientThreshold"), 0.5,
+                            searchMode == QLatin1String("strict") ? 1.0 : 0.25);
+        opts.caliperOpts.smoothSigma =
+            resolveAutoReal(request, QStringLiteral("smoothSigma"), 0.8, 0.8);
+        // Auto mode may retry reverse search direction when too many calipers miss.
+        opts.searchMode = searchMode;
+
+        FitLineResult fitResult;
+        QVector<QPointF> edges;
+        VisionImage overlay;
+        if (!EdgeProbe::findLine(input, p0, p1, opts, fitResult, edges, overlay, &err)) {
+            OperatorResultMeta meta;
+            meta.outcome = err.contains(QStringLiteral("不足")) || err.contains(QStringLiteral("无效"))
+                ? OperatorOutcome::InvalidGeometry
+                : OperatorOutcome::NoCandidate;
+            meta.failureStage = QStringLiteral("caliper_or_fit");
+            meta.message = err;
+            meta.qualityScore = 0.0;
+            ExecutionResult r = failResult(err,
+                                           diagnosticCodeForOutcome(meta.outcome),
+                                           t.elapsed());
+            applyOperatorMeta(r, meta);
+            return r;
+        }
+
+        const double quality = EdgeProbe::scoreLine(fitResult, edges, p0, p1);
+        fitResult.confidence = qMax(fitResult.confidence, quality);
+
+        Line2D line;
+        line.start = fitResult.start;
+        line.end = fitResult.end;
+        MeasurementResult m;
+        m.valid = true;
+        m.measurementType = QStringLiteral("findLine");
+        m.angle = fitResult.angleDeg;
+        m.width = QLineF(fitResult.start, fitResult.end).length();
+        m.center = (fitResult.start + fitResult.end) * 0.5;
+        m.unit = QStringLiteral("px");
+        m.confidence = fitResult.confidence;
+        m.message = QStringLiteral("查找直线成功");
+        m = finalizeLengthMeasurement(m, request, context);
+
+        OverlayList overlays;
+        OverlayItem expected;
+        expected.type = OverlayItemType::Line;
+        expected.points = {p0, p1};
+        expected.color = QColor(160, 160, 160);
+        expected.penWidth = 1.5;
+        overlays.append(expected);
+        OverlayItem fitted;
+        fitted.type = OverlayItemType::Line;
+        fitted.points = {fitResult.start, fitResult.end};
+        fitted.color = QColor(0, 220, 255);
+        fitted.penWidth = 2.5;
+        overlays.append(fitted);
+        for (const QPointF &ep : edges) {
+            OverlayItem pt;
+            pt.type = OverlayItemType::Contour;
+            pt.points = {ep + QPointF(-2, -2), ep + QPointF(2, -2),
+                         ep + QPointF(2, 2), ep + QPointF(-2, 2)};
+            pt.color = QColor(80, 255, 80);
+            pt.penWidth = 1.5;
+            overlays.append(pt);
+        }
+
+        QJsonObject autoSnap;
+        autoSnap.insert(QStringLiteral("numCalipers"), opts.numCalipers);
+        autoSnap.insert(QStringLiteral("searchLength"), opts.searchLength);
+        autoSnap.insert(QStringLiteral("projectionLength"), opts.projectionLength);
+        autoSnap.insert(QStringLiteral("numToIgnore"), opts.numToIgnore);
+        autoSnap.insert(QStringLiteral("polarity"), opts.caliperOpts.polarity);
+        autoSnap.insert(QStringLiteral("gradientThreshold"), opts.caliperOpts.gradientThreshold);
+        autoSnap.insert(QStringLiteral("searchMode"), searchMode);
+        autoSnap.insert(QStringLiteral("qualityScore"), quality);
+        autoSnap.insert(QStringLiteral("residualRms"), fitResult.residualRms);
+
+        OperatorResultMeta meta;
+        meta.autoSnapshot = makeAutoSnapshot(autoSnap);
+        meta.qualityScore = quality;
+        if (quality < 0.35) {
+            meta.outcome = OperatorOutcome::SuccessWithWarning;
+            meta.failureStage = QStringLiteral("low_quality");
+            meta.message = QStringLiteral("直线已找到但质量偏低，建议调整示教或搜索长度");
+        } else {
+            meta.outcome = OperatorOutcome::Success;
+        }
+
+        ExecutionResult r;
+        r.outputs.insert(QStringLiteral("image"), DataValue(input));
+        r.outputs.insert(QStringLiteral("debugImage"), DataValue(overlay));
+        r.outputs.insert(QStringLiteral("line"), DataValue(line));
+        r.outputs.insert(QStringLiteral("angle"), DataValue(fitResult.angleDeg));
+        r.outputs.insert(QStringLiteral("length"), DataValue(m.width));
+        r.outputs.insert(QStringLiteral("residualRms"), DataValue(fitResult.residualRms));
+        r.outputs.insert(QStringLiteral("inlierCount"), DataValue(fitResult.inlierCount));
+        r.outputs.insert(QStringLiteral("confidence"), DataValue(fitResult.confidence));
+        r.outputs.insert(QStringLiteral("candidateCount"), DataValue(int(edges.size())));
+        r.outputs.insert(QStringLiteral("measurement"), DataValue(m));
+        r.outputs.insert(QStringLiteral("overlay"), DataValue(overlays));
+        r.overlays = overlays;
+        r.measurement = m;
+        r.elapsedMs = t.elapsed();
+        applyOperatorMeta(r, meta);
+        return r;
+    }
+};
+
+class FindCircleByCalipersExecutor : public INodeExecutor
+{
+public:
+    QString typeId() const override { return VisionNodeIds::findCircle(); }
+    ExecutionResult execute(const ExecutionRequest &request, ExecutionContext &context) override
+    {
+        QElapsedTimer t;
+        t.start();
+        QString err;
+        QString code;
+        VisionImage input = requireImageWithRoi(request, &err, &code);
+        if (input.isEmpty())
+            return failResult(err, code.isEmpty() ? DiagnosticCodes::imageEmpty() : code, t.elapsed());
+
+        FindCircleByCalipersOptions opts;
+        opts.searchMode =
+            resolveAutoStringParam(request, QStringLiteral("searchMode"),
+                                   QStringLiteral("auto"), QStringLiteral("auto"));
+        const bool hasTeach =
+            request.parameters.contains(QStringLiteral("cx"))
+            && request.parameters.contains(QStringLiteral("cy"))
+            && request.parameters.contains(QStringLiteral("radius"));
+        if (!hasTeach) {
+            return failResult(QStringLiteral("请在图像上示教期望圆搜索区域"),
+                              DiagnosticCodes::invalidParameter(), t.elapsed());
+        }
+        const QPointF center(resolveRealInput(request, QStringLiteral("cx"), 0.0),
+                             resolveRealInput(request, QStringLiteral("cy"), 0.0));
+        const double radius = resolveRealInput(request, QStringLiteral("radius"), 0.0);
+        if (!(radius > 1.0)) {
+            return failResult(QStringLiteral("期望半径无效，请重新示教"),
+                              DiagnosticCodes::degenerateGeometry(), t.elapsed());
+        }
+
+        opts.numCalipers = resolveAutoInt(request, QStringLiteral("numCalipers"), 12,
+                                          autoCaliperCountForArc(radius,
+                                              resolveRealInput(request, QStringLiteral("angleSpan"), 360.0)));
+        opts.searchLength = resolveAutoReal(request, QStringLiteral("searchLength"), 0.0,
+                                            autoSearchLength(radius, 0.45));
+        opts.projectionLength = resolveAutoReal(request, QStringLiteral("projectionLength"), 0.0,
+                                                qBound(3.0, radius * 0.08, 24.0));
+        opts.numToIgnore = resolveAutoInt(request, QStringLiteral("numToIgnore"), -1,
+                                          qMax(1, int(std::lround(opts.numCalipers * 0.35))));
+        opts.angleStartDeg = resolveRealInput(request, QStringLiteral("angleStart"), 0.0);
+        opts.angleSpanDeg = resolveRealInput(request, QStringLiteral("angleSpan"), 360.0);
+        opts.searchInward = resolveBoolParam(request, QStringLiteral("searchInward"), true);
+        opts.caliperOpts.polarity =
+            resolveAutoStringParam(request, QStringLiteral("polarity"),
+                                   QStringLiteral("any"), QStringLiteral("any"));
+        opts.caliperOpts.gradientThreshold =
+            resolveAutoReal(request, QStringLiteral("gradientThreshold"), 0.5,
+                            opts.searchMode == QLatin1String("strict") ? 1.0 : 0.35);
+        opts.caliperOpts.smoothSigma =
+            resolveAutoReal(request, QStringLiteral("smoothSigma"), 0.8, 0.8);
+
+        FitCircleResult fitResult;
+        QVector<QPointF> edges;
+        VisionImage overlay;
+        FindCircleDiagnostics diag;
+        if (!EdgeProbe::findCircle(input, center, radius, opts, fitResult, edges, overlay, &diag,
+                                   &err)) {
+            OperatorResultMeta meta;
+            meta.outcome = err.contains(QStringLiteral("不足")) || err.contains(QStringLiteral("无效"))
+                ? OperatorOutcome::InvalidGeometry
+                : OperatorOutcome::NoCandidate;
+            meta.failureStage = diag.failureStage.isEmpty()
+                ? QStringLiteral("caliper_or_fit")
+                : diag.failureStage;
+            meta.message = err;
+            meta.qualityScore = 0.0;
+            ExecutionResult r = failResult(err, diagnosticCodeForOutcome(meta.outcome), t.elapsed());
+            applyOperatorMeta(r, meta);
+            return r;
+        }
+
+        const double quality = EdgeProbe::scoreCircle(fitResult, edges);
+        fitResult.confidence = qMax(fitResult.confidence, quality);
+
+        MeasurementResult m;
+        m.valid = true;
+        m.measurementType = QStringLiteral("findCircle");
+        m.center = fitResult.center;
+        m.width = fitResult.radius * 2.0;
+        m.height = fitResult.radius * 2.0;
+        m.unit = QStringLiteral("px");
+        m.confidence = fitResult.confidence;
+        m.message = QStringLiteral("查找圆成功");
+        m = finalizeLengthMeasurement(m, request, context);
+
+        Circle2D c;
+        c.center = fitResult.center;
+        c.radius = m.width * 0.5;
+
+        OverlayList overlays;
+        OverlayItem expected;
+        expected.type = OverlayItemType::Contour;
+        {
+            QVector<QPointF> arc;
+            for (int i = 0; i < 64; ++i) {
+                const double a = (2.0 * 3.141592653589793 * i) / 64.0;
+                arc.append(QPointF(center.x() + radius * std::cos(a),
+                                   center.y() + radius * std::sin(a)));
+            }
+            expected.points = arc;
+        }
+        expected.color = QColor(160, 160, 160);
+        expected.penWidth = 1.5;
+        overlays.append(expected);
+        OverlayItem fitted;
+        fitted.type = OverlayItemType::Contour;
+        {
+            QVector<QPointF> arc;
+            for (int i = 0; i < 72; ++i) {
+                const double a = (2.0 * 3.141592653589793 * i) / 72.0;
+                arc.append(QPointF(c.center.x() + c.radius * std::cos(a),
+                                   c.center.y() + c.radius * std::sin(a)));
+            }
+            fitted.points = arc;
+        }
+        fitted.color = QColor(0, 220, 255);
+        fitted.penWidth = 2.5;
+        overlays.append(fitted);
+        for (const QPointF &ep : edges) {
+            OverlayItem pt;
+            pt.type = OverlayItemType::Contour;
+            pt.points = {ep + QPointF(-2, -2), ep + QPointF(2, -2),
+                         ep + QPointF(2, 2), ep + QPointF(-2, 2)};
+            pt.color = QColor(80, 255, 80);
+            pt.penWidth = 1.5;
+            overlays.append(pt);
+        }
+
+        QJsonObject autoSnap;
+        autoSnap.insert(QStringLiteral("numCalipers"), opts.numCalipers);
+        autoSnap.insert(QStringLiteral("searchLength"), opts.searchLength);
+        autoSnap.insert(QStringLiteral("numToIgnore"), opts.numToIgnore);
+        autoSnap.insert(QStringLiteral("searchMode"), opts.searchMode);
+        autoSnap.insert(QStringLiteral("qualityScore"), quality);
+        autoSnap.insert(QStringLiteral("failedCalipers"), diag.failedCalipers);
+        autoSnap.insert(QStringLiteral("residualRms"), fitResult.residualRms);
+
+        OperatorResultMeta meta;
+        meta.autoSnapshot = makeAutoSnapshot(autoSnap);
+        meta.qualityScore = quality;
+        if (quality < 0.35) {
+            meta.outcome = OperatorOutcome::SuccessWithWarning;
+            meta.failureStage = QStringLiteral("low_quality");
+            meta.message = QStringLiteral("圆已找到但质量偏低");
+        } else {
+            meta.outcome = OperatorOutcome::Success;
+        }
+
+        ExecutionResult r;
+        r.outputs.insert(QStringLiteral("image"), DataValue(input));
+        r.outputs.insert(QStringLiteral("debugImage"), DataValue(overlay));
+        r.outputs.insert(QStringLiteral("circle"), DataValue(c));
+        r.outputs.insert(QStringLiteral("center"), DataValue(m.center));
+        r.outputs.insert(QStringLiteral("radius"), DataValue(c.radius));
+        r.outputs.insert(QStringLiteral("diameter"), DataValue(m.width));
+        r.outputs.insert(QStringLiteral("residualRms"), DataValue(fitResult.residualRms));
+        r.outputs.insert(QStringLiteral("inlierCount"), DataValue(fitResult.inlierCount));
+        r.outputs.insert(QStringLiteral("confidence"), DataValue(fitResult.confidence));
+        r.outputs.insert(QStringLiteral("candidateCount"), DataValue(int(edges.size())));
+        r.outputs.insert(QStringLiteral("failedCalipers"), DataValue(diag.failedCalipers));
+        r.outputs.insert(QStringLiteral("caliperCount"), DataValue(diag.caliperCount));
+        r.outputs.insert(QStringLiteral("measurement"), DataValue(m));
+        r.outputs.insert(QStringLiteral("overlay"), DataValue(overlays));
+        r.overlays = overlays;
+        r.measurement = m;
+        r.elapsedMs = t.elapsed();
+        applyOperatorMeta(r, meta);
         return r;
     }
 };
@@ -677,6 +1025,8 @@ void registerAdvancedMeasureExecutors(NodeExecutorRegistry &reg)
     reg.registerFactory(VisionNodeIds::angleMeasure(), [] { return std::make_shared<AngleMeasureExecutor>(); });
     reg.registerFactory(VisionNodeIds::parallelDistance(), [] { return std::make_shared<ParallelDistanceExecutor>(); });
     reg.registerFactory(VisionNodeIds::caliperMeasure(), [] { return std::make_shared<CaliperMeasureExecutor>(); });
+    reg.registerFactory(VisionNodeIds::findLine(), [] { return std::make_shared<FindLineByCalipersExecutor>(); });
+    reg.registerFactory(VisionNodeIds::findCircle(), [] { return std::make_shared<FindCircleByCalipersExecutor>(); });
     reg.registerFactory(VisionNodeIds::fitCircle(), [] { return std::make_shared<FitCircleExecutor>(); });
     reg.registerFactory(VisionNodeIds::fitLine(), [] { return std::make_shared<FitLineExecutor>(); });
     reg.registerFactory(VisionNodeIds::measureStatistics(), [] { return std::make_shared<MeasureStatisticsExecutor>(); });

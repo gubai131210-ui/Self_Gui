@@ -150,4 +150,76 @@ public:
                            QString *error = nullptr);
 };
 
+/// VisionPro-style Find Line: distribute N calipers along an expected segment.
+struct FindLineByCalipersOptions
+{
+    int numCalipers{5};
+    double searchLength{40.0};     // perpendicular search length (px)
+    double projectionLength{8.0};  // parallel sampling width (px)
+    int numToIgnore{0};            // allowed failed/outlier calipers
+    /// auto | strict — auto loosens fail quota and may try reverse search
+    QString searchMode{QStringLiteral("auto")};
+    CaliperOptions caliperOpts;
+};
+
+struct FindCircleByCalipersOptions
+{
+    int numCalipers{12};
+    double searchLength{0.0};      // 0 = auto (~0.35 * radius)
+    double projectionLength{0.0};  // 0 = auto
+    int numToIgnore{-1};           // <0 = auto (~20% of calipers)
+    double angleStartDeg{0.0};
+    double angleSpanDeg{360.0};
+    bool searchInward{true};
+    /// auto | strict — auto loosens thresholds and may try reverse search
+    QString searchMode{QStringLiteral("auto")};
+    CaliperOptions caliperOpts;
+};
+
+struct FindCircleDiagnostics
+{
+    int caliperCount{0};
+    int failedCalipers{0};
+    int foundEdgePoints{0};
+    int usedInliers{0};
+    double residualRms{0.0};
+    QString failureStage; // empty on success
+};
+
+class FindLineByCalipersAlgorithm
+{
+public:
+    static bool apply(const VisionImage &input,
+                      QPointF p0,
+                      QPointF p1,
+                      const FindLineByCalipersOptions &opts,
+                      FitLineResult &result,
+                      QVector<QPointF> &foundEdgePoints,
+                      VisionImage &overlay,
+                      QString *error = nullptr);
+};
+
+class FindCircleByCalipersAlgorithm
+{
+public:
+    static bool apply(const VisionImage &input,
+                      QPointF center,
+                      double radius,
+                      const FindCircleByCalipersOptions &opts,
+                      FitCircleResult &result,
+                      QVector<QPointF> &foundEdgePoints,
+                      VisionImage &overlay,
+                      QString *error = nullptr);
+
+    static bool apply(const VisionImage &input,
+                      QPointF center,
+                      double radius,
+                      const FindCircleByCalipersOptions &opts,
+                      FitCircleResult &result,
+                      QVector<QPointF> &foundEdgePoints,
+                      VisionImage &overlay,
+                      FindCircleDiagnostics *diagnostics,
+                      QString *error = nullptr);
+};
+
 #endif // CALIPERALGORITHM_H

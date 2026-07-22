@@ -119,7 +119,7 @@ bool SubpixelRefineAlgorithm::refine(const VisionImage &image,
         }
         refined = QPointF(pts.front().x, pts.front().y);
         const double shift = std::hypot(refined.x() - coarse.x(), refined.y() - coarse.y());
-        confidence = qBound(0.0, 1.0, 1.0 - shift / qMax(1.0, win * 0.5));
+        confidence = qBound(0.0, 1.0 - shift / qMax(1.0, win * 0.5), 1.0);
         ok = std::isfinite(refined.x()) && std::isfinite(refined.y());
         if (!ok)
             cvError = QStringLiteral("亚像素结果无效");

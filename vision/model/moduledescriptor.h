@@ -3,6 +3,7 @@
 
 #include "moduleparamdef.h"
 #include "moduleuischema.h"
+#include "interactivegeometry.h"
 #include "vision/data/datatype.h"
 
 #include <QColor>
@@ -66,6 +67,8 @@ struct ModuleDescriptor
     QStringList outputKeys;
     /// Optional declarative UI hints (editor, preview layers, capability tags).
     Selt::ModuleUiSchema uiSchema;
+    /// Declarative pre-execution geometry editor configuration.
+    Selt::InteractiveGeometrySpec interactiveGeometry;
     /// When false (plugins without hints), canvas exposes all ports for compatibility.
     bool hasExposureHints{false};
     /// Plugin/descriptor capability version. 0 = legacy (full expose unless hints set).
