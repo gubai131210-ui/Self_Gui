@@ -127,6 +127,12 @@ public:
     void setExtendedRoi(const Selt::ExtendedRoi &roi);
     void clearImage();
     void setRoiEditEnabled(bool enabled);
+    void setDiagnosisText(const QString &text);
+    void setDebugImage(const QImage &image, const QString &label = QStringLiteral("调试图"));
+    /// 原图 / ROI / 预处理调试图，供预览层级切换（可为空）。
+    void setPreviewLayers(const QImage &original,
+                          const QImage &roiCrop,
+                          const QImage &preprocess);
 
     RoiRect currentRoi() const;
     Selt::ExtendedRoi currentExtendedRoi() const;
@@ -143,10 +149,14 @@ private:
     void resetHud();
     void applyOverlayFilter();
     void onRoiToolChanged(int index);
+    void onPreviewSourceChanged(int index);
     void configureCompactButton(QPushButton *button, const QString &text, const QString &tip);
+    void applyDisplayedImage();
+    void rebuildPreviewSourceCombo();
 
     QLabel *m_titleLabel{nullptr};
     QLabel *m_hudLabel{nullptr};
+    QLabel *m_diagnosisLabel{nullptr};
     ImageCanvasWidget *m_canvas{nullptr};
     QPushButton *m_fitBtn{nullptr};
     QPushButton *m_resetBtn{nullptr};
@@ -157,8 +167,16 @@ private:
     QPushButton *m_bgToggleBtn{nullptr};
     QComboBox *m_roiToolCombo{nullptr};
     QComboBox *m_overlayFilter{nullptr};
+    QComboBox *m_previewSourceCombo{nullptr};
     OverlayList m_allOverlays;
     QString m_title;
+    QImage m_resultImage;
+    QImage m_debugImage;
+    QImage m_originalImage;
+    QImage m_roiImage;
+    QImage m_preprocessImage;
+    QString m_debugLabel;
+    bool m_resetViewOnSourceChange{true};
 };
 
 #endif // IMAGEPREVIEWWIDGET_H

@@ -273,10 +273,12 @@ QLabel#RunStatusLabel {
 }
 
 QLabel#ImageHudLabel {
-    color: #c8ccd2;
-    background: rgba(28, 30, 34, 180);
-    padding: 2px 8px;
-    border-radius: 3px;
+    color: #f0f2f5;
+    background-color: #1c1e22;
+    padding: 4px 10px;
+    border-top: 1px solid #3e424a;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
 }
 
 QPushButton#ImageToolbarButton {

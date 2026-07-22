@@ -261,6 +261,113 @@ public:
     }
 };
 
+class GammaCorrectExecutor : public INodeExecutor
+{
+public:
+    QString typeId() const override { return VisionNodeIds::gammaCorrect(); }
+    ExecutionResult execute(const ExecutionRequest &request, ExecutionContext &) override
+    {
+        QElapsedTimer t;
+        t.start();
+        QString err;
+        QString code;
+        VisionImage input = requireImageWithRoi(request, &err, &code);
+        if (input.isEmpty())
+            return failResult(err, code.isEmpty() ? DiagnosticCodes::imageEmpty() : code, t.elapsed());
+        VisionImage out;
+        if (!GammaCorrectAlgorithm::apply(input, out,
+                                          resolveRealInput(request, QStringLiteral("gamma"), 1.0),
+                                          &err))
+            return failResult(err, DiagnosticCodes::opencvException(), t.elapsed());
+        ExecutionResult r;
+        r.outputs.insert(QStringLiteral("image"), DataValue(out));
+        r.status = ModuleStatus::Success;
+        r.elapsedMs = t.elapsed();
+        return r;
+    }
+};
+
+class ContrastBrightnessExecutor : public INodeExecutor
+{
+public:
+    QString typeId() const override { return VisionNodeIds::contrastBrightness(); }
+    ExecutionResult execute(const ExecutionRequest &request, ExecutionContext &) override
+    {
+        QElapsedTimer t;
+        t.start();
+        QString err;
+        QString code;
+        VisionImage input = requireImageWithRoi(request, &err, &code);
+        if (input.isEmpty())
+            return failResult(err, code.isEmpty() ? DiagnosticCodes::imageEmpty() : code, t.elapsed());
+        VisionImage out;
+        if (!ContrastBrightnessAlgorithm::apply(input, out,
+                                                resolveRealInput(request, QStringLiteral("alpha"), 1.0),
+                                                resolveRealInput(request, QStringLiteral("beta"), 0.0),
+                                                &err))
+            return failResult(err, DiagnosticCodes::opencvException(), t.elapsed());
+        ExecutionResult r;
+        r.outputs.insert(QStringLiteral("image"), DataValue(out));
+        r.status = ModuleStatus::Success;
+        r.elapsedMs = t.elapsed();
+        return r;
+    }
+};
+
+class ClaheEnhanceExecutor : public INodeExecutor
+{
+public:
+    QString typeId() const override { return VisionNodeIds::claheEnhance(); }
+    ExecutionResult execute(const ExecutionRequest &request, ExecutionContext &) override
+    {
+        QElapsedTimer t;
+        t.start();
+        QString err;
+        QString code;
+        VisionImage input = requireImageWithRoi(request, &err, &code);
+        if (input.isEmpty())
+            return failResult(err, code.isEmpty() ? DiagnosticCodes::imageEmpty() : code, t.elapsed());
+        VisionImage out;
+        if (!ClaheAlgorithm::apply(input, out,
+                                   resolveRealInput(request, QStringLiteral("clipLimit"), 2.0),
+                                   resolveIntParam(request, QStringLiteral("tileSize"), 8),
+                                   &err))
+            return failResult(err, DiagnosticCodes::opencvException(), t.elapsed());
+        ExecutionResult r;
+        r.outputs.insert(QStringLiteral("image"), DataValue(out));
+        r.status = ModuleStatus::Success;
+        r.elapsedMs = t.elapsed();
+        return r;
+    }
+};
+
+class SharpenExecutor : public INodeExecutor
+{
+public:
+    QString typeId() const override { return VisionNodeIds::sharpen(); }
+    ExecutionResult execute(const ExecutionRequest &request, ExecutionContext &) override
+    {
+        QElapsedTimer t;
+        t.start();
+        QString err;
+        QString code;
+        VisionImage input = requireImageWithRoi(request, &err, &code);
+        if (input.isEmpty())
+            return failResult(err, code.isEmpty() ? DiagnosticCodes::imageEmpty() : code, t.elapsed());
+        VisionImage out;
+        if (!SharpenAlgorithm::apply(input, out,
+                                     resolveRealInput(request, QStringLiteral("amount"), 0.5),
+                                     resolveRealInput(request, QStringLiteral("sigma"), 1.0),
+                                     &err))
+            return failResult(err, DiagnosticCodes::opencvException(), t.elapsed());
+        ExecutionResult r;
+        r.outputs.insert(QStringLiteral("image"), DataValue(out));
+        r.status = ModuleStatus::Success;
+        r.elapsedMs = t.elapsed();
+        return r;
+    }
+};
+
 } // namespace
 
 void registerPreprocessExecutors(NodeExecutorRegistry &reg)
@@ -274,6 +381,10 @@ void registerPreprocessExecutors(NodeExecutorRegistry &reg)
     reg.registerFactory(VisionNodeIds::colorConvert(), [] { return std::make_shared<ColorConvertExecutor>(); });
     reg.registerFactory(VisionNodeIds::geometricTransform(), [] { return std::make_shared<GeometricTransformExecutor>(); });
     reg.registerFactory(VisionNodeIds::morphGradient(), [] { return std::make_shared<MorphGradientExecutor>(); });
+    reg.registerFactory(VisionNodeIds::gammaCorrect(), [] { return std::make_shared<GammaCorrectExecutor>(); });
+    reg.registerFactory(VisionNodeIds::contrastBrightness(), [] { return std::make_shared<ContrastBrightnessExecutor>(); });
+    reg.registerFactory(VisionNodeIds::claheEnhance(), [] { return std::make_shared<ClaheEnhanceExecutor>(); });
+    reg.registerFactory(VisionNodeIds::sharpen(), [] { return std::make_shared<SharpenExecutor>(); });
 }
 
 } // namespace Selt

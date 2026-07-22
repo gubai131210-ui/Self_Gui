@@ -200,6 +200,8 @@ void CanvasView::dropEvent(QDropEvent *event)
     if (!event->mimeData()->hasFormat(QString::fromLatin1(kNodeTypeMime)))
         return;
     const QString type = QString::fromUtf8(event->mimeData()->data(QString::fromLatin1(kNodeTypeMime)));
+    if (type.isEmpty())
+        return;
     if (auto *cs = canvasScene())
         cs->createNodeAt(type, mapToScene(event->position().toPoint()));
     event->acceptProposedAction();

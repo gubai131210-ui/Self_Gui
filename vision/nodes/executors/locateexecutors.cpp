@@ -235,19 +235,36 @@ public:
         opts.maxCount = resolveIntParam(request, QStringLiteral("maxCount"), 5);
         opts.nmsIoU = resolveRealInput(request, QStringLiteral("nmsIoU"), 0.3);
         opts.nmsCenterDistance = resolveRealInput(request, QStringLiteral("nmsCenterDistance"), 0.0);
-        if (!TemplateMatchMultiAlgorithm::apply(image, templ, opts, peaks, scores, overlay, &err))
+        opts.scaleMin = resolveRealInput(request, QStringLiteral("scaleMin"), 1.0);
+        opts.scaleMax = resolveRealInput(request, QStringLiteral("scaleMax"), 1.0);
+        opts.scaleStep = resolveRealInput(request, QStringLiteral("scaleStep"), 0.1);
+        opts.angleMin = resolveRealInput(request, QStringLiteral("angleMin"), 0.0);
+        opts.angleMax = resolveRealInput(request, QStringLiteral("angleMax"), 0.0);
+        opts.angleStep = resolveRealInput(request, QStringLiteral("angleStep"), 15.0);
+        QVector<double> scales;
+        QVector<double> angles;
+        if (!TemplateMatchMultiAlgorithm::apply(image, templ, opts, peaks, scores, overlay, &err,
+                                                &scales, &angles))
             return failResult(err, DiagnosticCodes::matchFailed(), t.elapsed());
         ExecutionResult r;
         r.outputs.insert(QStringLiteral("image"), DataValue(overlay));
         r.outputs.insert(QStringLiteral("count"), DataValue(int(peaks.size())));
         r.outputs.insert(QStringLiteral("candidateCount"), DataValue(int(peaks.size())));
         r.outputs.insert(QStringLiteral("selectedIndex"), DataValue(peaks.isEmpty() ? -1 : 0));
+        r.outputs.insert(QStringLiteral("found"), DataValue(!peaks.isEmpty()));
         if (!peaks.isEmpty()) {
             r.outputs.insert(QStringLiteral("center"), DataValue(peaks.first()));
             r.outputs.insert(QStringLiteral("score"),
                              DataValue(scores.isEmpty() ? 0.0 : scores.first()));
             r.outputs.insert(QStringLiteral("confidence"),
                              DataValue(scores.isEmpty() ? 0.0 : scores.first()));
+            r.outputs.insert(QStringLiteral("scale"),
+                             DataValue(scales.isEmpty() ? 1.0 : scales.first()));
+            r.outputs.insert(QStringLiteral("angle"),
+                             DataValue(angles.isEmpty() ? 0.0 : angles.first()));
+        } else {
+            r.diagnosticCode = DiagnosticCodes::noTarget();
+            r.errorMessage = QStringLiteral("未找到满足阈值的模板匹配");
         }
         r.status = ModuleStatus::Success;
         r.elapsedMs = t.elapsed();

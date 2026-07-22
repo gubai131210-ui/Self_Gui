@@ -349,6 +349,92 @@ QString DataValue::debugString() const
     }
 }
 
+QString DataValue::displaySummary() const
+{
+    switch (m_type) {
+    case DataTypeId::None:
+        return QStringLiteral("-");
+    case DataTypeId::Bool:
+        return toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case DataTypeId::Int:
+        return QString::number(toInt());
+    case DataTypeId::Real:
+        return QString::number(toReal(), 'f', 3);
+    case DataTypeId::String: {
+        const QString text = toString();
+        if (text.size() > 80)
+            return text.left(77) + QStringLiteral("...");
+        return text.isEmpty() ? QStringLiteral("(空)") : text;
+    }
+    case DataTypeId::ByteArray:
+        return QStringLiteral("len=%1").arg(toByteArray().size());
+    case DataTypeId::Image:
+        if (m_image.isEmpty())
+            return QStringLiteral("(空图)");
+        return QStringLiteral("%1×%2 ch%3")
+            .arg(m_image.width())
+            .arg(m_image.height())
+            .arg(m_image.channels());
+    case DataTypeId::Roi:
+        return m_roi.enabled
+            ? QStringLiteral("启用 %1×%2")
+                  .arg(m_roi.rect.width(), 0, 'f', 0)
+                  .arg(m_roi.rect.height(), 0, 'f', 0)
+            : QStringLiteral("未启用");
+    case DataTypeId::Measurement:
+        return QStringLiteral("%1 / %2 conf=%3")
+            .arg(m_measurement.decisionState.isEmpty() ? QStringLiteral("-")
+                                                      : m_measurement.decisionState)
+            .arg(m_measurement.measurementType.isEmpty() ? QStringLiteral("measure")
+                                                        : m_measurement.measurementType)
+            .arg(m_measurement.confidence, 0, 'f', 2);
+    case DataTypeId::Overlay:
+        return QStringLiteral("%1 项").arg(m_overlays.size());
+    case DataTypeId::Point2D: {
+        const QPointF p = toPoint2D();
+        return QStringLiteral("(%1, %2)").arg(p.x(), 0, 'f', 1).arg(p.y(), 0, 'f', 1);
+    }
+    case DataTypeId::Line:
+        return QStringLiteral("(%1,%2)→(%3,%4)")
+            .arg(m_line.start.x(), 0, 'f', 1)
+            .arg(m_line.start.y(), 0, 'f', 1)
+            .arg(m_line.end.x(), 0, 'f', 1)
+            .arg(m_line.end.y(), 0, 'f', 1);
+    case DataTypeId::Circle:
+        return QStringLiteral("c=(%1,%2) r=%3")
+            .arg(m_circle.center.x(), 0, 'f', 1)
+            .arg(m_circle.center.y(), 0, 'f', 1)
+            .arg(m_circle.radius, 0, 'f', 1);
+    case DataTypeId::Contour:
+        return QStringLiteral("%1 轮廓").arg(m_contours.contours.size());
+    case DataTypeId::Region:
+        return QStringLiteral("labels=%1").arg(m_region.labelCount);
+    case DataTypeId::Table:
+        return QStringLiteral("%1×%2")
+            .arg(m_table.columns.size())
+            .arg(m_table.rows.size());
+    default:
+        return debugString();
+    }
+}
+
+QString DataValue::displayDetail() const
+{
+    switch (m_type) {
+    case DataTypeId::String:
+        return toString();
+    case DataTypeId::Image:
+    case DataTypeId::Overlay:
+    case DataTypeId::Measurement:
+    case DataTypeId::Table:
+    case DataTypeId::Contour:
+    case DataTypeId::Region:
+        return debugString();
+    default:
+        return displaySummary();
+    }
+}
+
 QJsonObject DataValue::toJson() const
 {
     QJsonObject obj;

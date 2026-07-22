@@ -27,6 +27,7 @@ struct RunRecord
     ModuleStatus status{ModuleStatus::Idle};
     QHash<QString, QString> inputSummary;
     QHash<QString, QString> outputSummary;
+    QHash<QString, QString> outputTypes;
     VisionImage imageSnapshot;
     OverlayList overlays;
     qint64 elapsedMs{0};

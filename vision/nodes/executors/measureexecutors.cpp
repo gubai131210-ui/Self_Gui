@@ -145,7 +145,8 @@ public:
         m.message = edges.size() >= 2
             ? QStringLiteral("卡尺双边测距成功")
             : QStringLiteral("卡尺仅找到单边边缘");
-        m = finalizeLengthMeasurement(m, request, context);
+        QString diagCode;
+        m = finalizeLengthMeasurement(m, request, context, &diagCode);
         ExecutionResult r;
         r.outputs.insert(QStringLiteral("image"), DataValue(overlay));
         r.outputs.insert(QStringLiteral("distance"), DataValue(m.width));
@@ -153,10 +154,21 @@ public:
         r.outputs.insert(QStringLiteral("candidateCount"), DataValue(int(edges.size())));
         r.outputs.insert(QStringLiteral("selectedIndex"), DataValue(0));
         r.outputs.insert(QStringLiteral("confidence"), DataValue(m.confidence));
+        r.outputs.insert(QStringLiteral("edgeStrength"), DataValue(confidence));
+        r.outputs.insert(QStringLiteral("unit"), DataValue(m.unit));
+        r.outputs.insert(QStringLiteral("calibrationId"),
+                         DataValue(m.calibrationId.isEmpty() ? QStringLiteral("(未标定)")
+                                                             : m.calibrationId));
         if (!edges.isEmpty())
             r.outputs.insert(QStringLiteral("point"), DataValue(edges.first()));
+        if (edges.size() >= 2)
+            r.outputs.insert(QStringLiteral("point2"), DataValue(edges.at(1)));
         r.measurement = m;
         r.status = ModuleStatus::Success;
+        if (m.confidence > 0.0 && m.confidence < 0.35)
+            r.diagnosticCode = DiagnosticCodes::lowConfidence();
+        else if (!diagCode.isEmpty())
+            r.diagnosticCode = diagCode;
         r.elapsedMs = t.elapsed();
         return r;
     }

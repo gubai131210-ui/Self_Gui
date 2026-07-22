@@ -3,6 +3,10 @@
 #include "app/nodebuilder.h"
 #include "core/command/documentcommands.h"
 #include "core/model/document.h"
+#include "ui/theme/uistyle.h"
+#include "ui/widgets/collapsiblesection.h"
+#include "ui/widgets/compactparamrow.h"
+#include "ui/widgets/inspectorheader.h"
 #if SELT_HAS_OPENCV
 #include "ui/bindingeditor.h"
 #include "vision/data/datatype.h"
@@ -14,19 +18,21 @@
 #include "vision/registry/visionnoderegistry.h"
 #endif
 
+#include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QFrame>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
@@ -37,6 +43,27 @@
 #include <QMap>
 
 #include <algorithm>
+
+namespace {
+
+#if SELT_HAS_OPENCV
+QString classifyParamSection(const ModuleParamDef &param)
+{
+    const QString group = param.group;
+    if (param.type == ModuleParamType::RoiRect
+        || group.contains(QStringLiteral("ROI"), Qt::CaseInsensitive)
+        || group.contains(QStringLiteral("区域"))) {
+        return QStringLiteral("ROI");
+    }
+    if (param.displayOrder >= 100)
+        return QStringLiteral("调试");
+    if (param.displayOrder >= 80)
+        return QStringLiteral("高级");
+    return QStringLiteral("基本");
+}
+#endif
+
+} // namespace
 
 PropertyPanel::PropertyPanel(QWidget *parent)
     : QWidget(parent)
@@ -70,11 +97,11 @@ void PropertyPanel::setSelectedNode(const QString &nodeId)
     setEnabled(enabled);
     if (!enabled) {
         clearDynamicWidgets();
-        m_typeLabel->setText(QStringLiteral("-"));
-        m_categoryLabel->setText(QStringLiteral("-"));
-        m_descLabel->setText(QStringLiteral("请选择一个视觉模块"));
-        m_statusLabel->setText(QStringLiteral("-"));
-        m_textEdit->clear();
+        if (m_header)
+            m_header->setEmpty();
+        clearResultThumbnail();
+        if (m_textEdit)
+            m_textEdit->clear();
         return;
     }
     loadFromNode(m_document->node(nodeId));
@@ -82,7 +109,48 @@ void PropertyPanel::setSelectedNode(const QString &nodeId)
 
 void PropertyPanel::setModuleStatusText(const QString &text)
 {
-    m_statusLabel->setText(text.isEmpty() ? QStringLiteral("未执行") : text);
+    NodeRunVisualStatus status = NodeRunVisualStatus::Idle;
+    const QString lower = text.toLower();
+    if (lower.contains(QStringLiteral("fail")) || text.contains(QStringLiteral("失败"))
+        || text.contains(QStringLiteral("错误"))) {
+        status = NodeRunVisualStatus::Failed;
+    } else if (lower.contains(QStringLiteral("run")) || text.contains(QStringLiteral("运行中"))) {
+        status = NodeRunVisualStatus::Running;
+    } else if (lower.contains(QStringLiteral("ok")) || text.contains(QStringLiteral("成功"))
+               || text.contains(QStringLiteral("完成"))) {
+        status = NodeRunVisualStatus::Success;
+    } else if (text.contains(QStringLiteral("警告"))) {
+        status = NodeRunVisualStatus::Warning;
+    }
+    setModuleRunStatus(status, text);
+}
+
+void PropertyPanel::setModuleRunStatus(NodeRunVisualStatus status, const QString &text)
+{
+    if (m_header)
+        m_header->setStatus(status, text);
+}
+
+void PropertyPanel::setResultThumbnail(const QImage &image)
+{
+    if (!m_thumbnail)
+        return;
+    if (image.isNull()) {
+        clearResultThumbnail();
+        return;
+    }
+    const QImage scaled = image.scaled(m_thumbnail->width() > 0 ? m_thumbnail->width() : 280,
+                                       100, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    m_thumbnail->setPixmap(QPixmap::fromImage(scaled));
+    m_thumbnail->setVisible(true);
+}
+
+void PropertyPanel::clearResultThumbnail()
+{
+    if (!m_thumbnail)
+        return;
+    m_thumbnail->clear();
+    m_thumbnail->setVisible(false);
 }
 
 void PropertyPanel::updateRoiInfoLabel(const QString &key, const QJsonObject &roiJson)
@@ -125,7 +193,6 @@ void PropertyPanel::pushNodeChange(const NodeModel &oldNode, const NodeModel &ne
         return;
     }
     ApplyingGuard guard(this);
-    // Port-exposure-only edits use a dedicated command for clearer undo history.
     const bool exposureOnly =
         newNode.parameters == oldNode.parameters
         && newNode.parameterBindings == oldNode.parameterBindings
@@ -157,7 +224,6 @@ void PropertyPanel::applyRoiParameter(const QString &key, const QJsonObject &roi
     NodeModel newNode = oldNode;
     newNode.parameters = oldNode.parameters;
     newNode.parameters.insert(key, roiJson);
-    // ROI edits force constant binding for that key.
     Selt::ParameterBinding binding = Selt::ParameterBinding::legacyConstantBinding(
         roiJson, Selt::DataTypeId::Roi);
     newNode.parameterBindings = oldNode.parameterBindings;
@@ -172,28 +238,38 @@ void PropertyPanel::applyRoiParameter(const QString &key, const QJsonObject &roi
 void PropertyPanel::rebuildUi()
 {
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(6, 6, 6, 6);
-    layout->setSpacing(6);
+    layout->setContentsMargins(Selt::UiStyle::panelMargin,
+                               Selt::UiStyle::panelMargin,
+                               Selt::UiStyle::panelMargin,
+                               Selt::UiStyle::panelMargin);
+    layout->setSpacing(Selt::UiStyle::compactSpacing);
 
-    auto *infoForm = new QFormLayout;
-    m_typeLabel = new QLabel(this);
-    m_categoryLabel = new QLabel(this);
-    m_descLabel = new QLabel(this);
-    m_descLabel->setWordWrap(true);
-    m_statusLabel = new QLabel(this);
-    infoForm->addRow(QStringLiteral("模块"), m_typeLabel);
-    infoForm->addRow(QStringLiteral("分类"), m_categoryLabel);
-    infoForm->addRow(QStringLiteral("说明"), m_descLabel);
-    infoForm->addRow(QStringLiteral("状态"), m_statusLabel);
-    layout->addLayout(infoForm);
+    m_header = new InspectorHeader(this);
+    layout->addWidget(m_header);
+    connect(m_header, &InspectorHeader::runNodeRequested, this, [this]() {
+        if (!m_nodeId.isEmpty())
+            emit runNodeRequested(m_nodeId);
+    });
+    connect(m_header, &InspectorHeader::copyParamsRequested, this,
+            &PropertyPanel::copyParametersToClipboard);
 
-    m_commonWidget = new QWidget(this);
-    auto *commonForm = new QFormLayout(m_commonWidget);
-    m_textEdit = new QLineEdit(m_commonWidget);
-    m_lockedCheck = new QCheckBox(QStringLiteral("锁定位置"), m_commonWidget);
-    commonForm->addRow(QStringLiteral("显示名称"), m_textEdit);
-    commonForm->addRow(QString(), m_lockedCheck);
-    layout->addWidget(m_commonWidget);
+    m_thumbnail = new QLabel(this);
+    m_thumbnail->setFixedHeight(100);
+    m_thumbnail->setAlignment(Qt::AlignCenter);
+    m_thumbnail->setStyleSheet(
+        QStringLiteral("background-color: %1; border: 1px solid %2; border-radius: 4px;")
+            .arg(Selt::UiStyle::panelAltBackground().name(),
+                 Selt::UiStyle::border().name()));
+    m_thumbnail->hide();
+    layout->addWidget(m_thumbnail);
+
+    auto *commonRow = new QHBoxLayout;
+    m_textEdit = new QLineEdit(this);
+    m_textEdit->setPlaceholderText(QStringLiteral("显示名称"));
+    m_lockedCheck = new QCheckBox(QStringLiteral("锁定"), this);
+    commonRow->addWidget(m_textEdit, 1);
+    commonRow->addWidget(m_lockedCheck);
+    layout->addLayout(commonRow);
 
     auto *filterRow = new QHBoxLayout;
     m_paramFilterEdit = new QLineEdit(this);
@@ -237,7 +313,8 @@ void PropertyPanel::clearDynamicWidgets()
     }
     m_paramWidgets.clear();
     m_bindingEditors.clear();
-    m_paramGroups.clear();
+    m_paramRows.clear();
+    m_sections.clear();
     m_dynamicLayout->addStretch(1);
 }
 
@@ -246,58 +323,73 @@ void PropertyPanel::applyParamFilter()
 #if SELT_HAS_OPENCV
     const QString filter = m_paramFilterEdit ? m_paramFilterEdit->text().trimmed() : QString();
     const bool boundOnly = m_boundOnlyCheck && m_boundOnlyCheck->isChecked();
-    for (auto it = m_bindingEditors.cbegin(); it != m_bindingEditors.cend(); ++it) {
-        BindingEditor *editor = it.value();
-        if (!editor)
-            continue;
-        QWidget *row = editor->parentWidget();
+    for (auto it = m_paramRows.cbegin(); it != m_paramRows.cend(); ++it) {
+        CompactParamRow *row = it.value();
         if (!row)
             continue;
         bool visible = true;
         if (!filter.isEmpty()) {
-            const QString label = row->property("paramLabel").toString();
-            const QString hay = QStringLiteral("%1 %2 %3").arg(it.key(), label, editor->toolTip());
+            const QString hay = QStringLiteral("%1 %2").arg(it.key(), row->paramLabel());
             visible = hay.contains(filter, Qt::CaseInsensitive);
         }
         if (visible && boundOnly) {
-            const Selt::ParameterBinding b = editor->currentBinding();
-            visible = b.kind != Selt::ParameterSourceKind::Constant;
+            BindingEditor *editor = m_bindingEditors.value(it.key());
+            if (editor) {
+                const Selt::ParameterBinding b = editor->currentBinding();
+                visible = b.kind != Selt::ParameterSourceKind::Constant;
+            }
         }
         row->setVisible(visible);
-        if (QWidget *group = row->parentWidget()) {
-            if (auto *form = qobject_cast<QFormLayout *>(group->layout())) {
-                for (int r = 0; r < form->rowCount(); ++r) {
-                    QLayoutItem *field = form->itemAt(r, QFormLayout::FieldRole);
-                    if (field && field->widget() == row) {
-                        if (QLayoutItem *labelItem = form->itemAt(r, QFormLayout::LabelRole)) {
-                            if (labelItem->widget())
-                                labelItem->widget()->setVisible(visible);
-                        }
-                        break;
-                    }
+        if (visible && !filter.isEmpty()) {
+            QWidget *p = row->parentWidget();
+            while (p) {
+                if (auto *section = qobject_cast<CollapsibleSection *>(p)) {
+                    if (!section->isExpanded())
+                        section->setExpanded(true);
+                    break;
                 }
+                p = p->parentWidget();
             }
         }
     }
-    for (auto it = m_paramGroups.begin(); it != m_paramGroups.end(); ++it) {
-        QGroupBox *box = it.value();
-        if (!box)
+    for (auto it = m_sections.begin(); it != m_sections.end(); ++it) {
+        CollapsibleSection *section = it.value();
+        if (!section)
             continue;
         bool any = false;
-        if (auto *form = qobject_cast<QFormLayout *>(box->layout())) {
-            for (int r = 0; r < form->rowCount(); ++r) {
-                QLayoutItem *fi = form->itemAt(r, QFormLayout::FieldRole);
-                if (fi && fi->widget() && fi->widget()->isVisibleTo(box))
-                    any = true;
-            }
+        for (auto rit = m_paramRows.cbegin(); rit != m_paramRows.cend(); ++rit) {
+            CompactParamRow *row = rit.value();
+            if (!row || !row->isVisible())
+                continue;
+            // row parent is body widget inside section
+            QWidget *p = row->parentWidget();
+            while (p && p != section)
+                p = p->parentWidget();
+            if (p == section)
+                any = true;
         }
-        const bool showBox = any || (filter.isEmpty() && !boundOnly);
-        box->setVisible(showBox);
-        if (showBox && any && !filter.isEmpty() && !box->isChecked())
-            box->setChecked(true);
+        // Port / subflow sections keep their own widgets; leave visible.
+        if (it.key() == QStringLiteral("端口暴露") || it.key() == QStringLiteral("子流程"))
+            continue;
+        section->setVisible(any || (filter.isEmpty() && !boundOnly));
     }
 #endif
 }
+
+#if SELT_HAS_OPENCV
+CollapsibleSection *PropertyPanel::ensureSection(const QString &title, bool defaultExpanded)
+{
+    if (m_sections.contains(title))
+        return m_sections.value(title);
+
+    const QString settingsKey = QStringLiteral("inspector/section/%1").arg(title);
+    auto *section = new CollapsibleSection(title, settingsKey, defaultExpanded, m_dynamicWidget);
+    const int insertAt = qMax(0, m_dynamicLayout->count() - 1);
+    m_dynamicLayout->insertWidget(insertAt, section);
+    m_sections.insert(title, section);
+    return section;
+}
+#endif
 
 void PropertyPanel::rebuildDynamicParameters(const NodeModel &node)
 {
@@ -311,40 +403,6 @@ void PropertyPanel::rebuildDynamicParameters(const NodeModel &node)
     std::sort(params.begin(), params.end(), [](const ModuleParamDef &a, const ModuleParamDef &b) {
         return a.displayOrder < b.displayOrder;
     });
-
-    QMap<QString, QFormLayout *> groupForms;
-    auto formForGroup = [&](const QString &group) -> QFormLayout * {
-        const QString title = group.isEmpty() ? QStringLiteral("参数") : group;
-        if (groupForms.contains(title))
-            return groupForms.value(title);
-        auto *box = new QGroupBox(title, m_dynamicWidget);
-        box->setCheckable(true);
-        box->setChecked(true);
-        box->setFlat(false);
-        auto *form = new QFormLayout(box);
-        form->setContentsMargins(6, 8, 6, 6);
-        form->setSpacing(6);
-        // Insert before trailing stretch.
-        const int insertAt = qMax(0, m_dynamicLayout->count() - 1);
-        m_dynamicLayout->insertWidget(insertAt, box);
-        m_paramGroups.insert(title, box);
-        groupForms.insert(title, form);
-        connect(box, &QGroupBox::toggled, box, [box](bool on) {
-            if (auto *fl = qobject_cast<QFormLayout *>(box->layout())) {
-                for (int r = 0; r < fl->rowCount(); ++r) {
-                    if (QLayoutItem *li = fl->itemAt(r, QFormLayout::FieldRole)) {
-                        if (li->widget())
-                            li->widget()->setVisible(on);
-                    }
-                    if (QLayoutItem *li = fl->itemAt(r, QFormLayout::LabelRole)) {
-                        if (li->widget())
-                            li->widget()->setVisible(on);
-                    }
-                }
-            }
-        });
-        return form;
-    };
 
     auto *toolbar = new QWidget(m_dynamicWidget);
     auto *toolbarLayout = new QHBoxLayout(toolbar);
@@ -364,223 +422,14 @@ void PropertyPanel::rebuildDynamicParameters(const NodeModel &node)
         loadFromNode(newNode);
     });
 
-    // ---- 输入与输出（画布暴露）----
-    {
-        auto *ioBox = new QGroupBox(QStringLiteral("输入与输出"), m_dynamicWidget);
-        ioBox->setCheckable(true);
-        ioBox->setChecked(true);
-        auto *ioForm = new QFormLayout(ioBox);
-        ioForm->setContentsMargins(6, 8, 6, 6);
-        ioForm->setSpacing(4);
-
-        const QVector<ConnectionModel> connections = m_document ? m_document->connections()
-                                                               : QVector<ConnectionModel>{};
-        const QStringList exposed = Selt::resolveExposedPortIds(node, desc, connections);
-        QVector<ModulePortDef> portsForUi = desc.ports;
-        if (node.type == VisionNodeIds::subflow()) {
-            const Selt::SubflowInterface iface =
-                Selt::subflowInterfaceFromParameters(node.parameters);
-            const QVector<ModulePortDef> dynamicPorts =
-                Selt::modulePortsFromSubflowInterface(iface);
-            if (!dynamicPorts.isEmpty())
-                portsForUi = dynamicPorts;
-        }
-        auto *hint = new QLabel(
-            QStringLiteral("勾选后在画布显示。已连接端口会强制保留。画布可见性不影响运行契约。"),
-            ioBox);
-        hint->setWordWrap(true);
-        hint->setStyleSheet(QStringLiteral("color: gray;"));
-        ioForm->addRow(hint);
-
-        auto *resetPortsBtn = new QPushButton(QStringLiteral("恢复默认端口布局"), ioBox);
-        ioForm->addRow(resetPortsBtn);
-        connect(resetPortsBtn, &QPushButton::clicked, this, [this]() {
-            if (m_nodeId.isEmpty() || !m_document || !m_document->hasNode(m_nodeId))
-                return;
-            NodeModel oldNode = m_document->node(m_nodeId);
-            NodeModel newNode = oldNode;
-            newNode.portExposureCustomized = false;
-            ModuleDescriptor d = VisionNodeRegistry::descriptor(oldNode.type);
-            if (oldNode.type == VisionNodeIds::subflow()) {
-                d.ports = Selt::modulePortsFromSubflowInterface(
-                    Selt::subflowInterfaceFromParameters(oldNode.parameters));
-                d.hasExposureHints = true;
-            }
-            Selt::syncNodePortExposure(newNode, d, m_document->connections());
-            Selt::layoutExposedPorts(d, newNode, m_document->connections());
-            pushNodeChange(oldNode, newNode);
-            loadFromNode(newNode);
-        });
-
-        const QList<Selt::PortRole> roleOrder = {Selt::PortRole::Primary, Selt::PortRole::Result,
-                                                Selt::PortRole::Debug};
-        for (Selt::PortRole role : roleOrder) {
-            QVector<ModulePortDef> rolePorts;
-            for (const ModulePortDef &port : portsForUi) {
-                if (port.role == role)
-                    rolePorts.append(port);
-            }
-            if (rolePorts.isEmpty())
-                continue;
-
-            auto *roleLabel = new QLabel(Selt::portRoleDisplayName(role), ioBox);
-            QFont roleFont = roleLabel->font();
-            roleFont.setBold(true);
-            roleLabel->setFont(roleFont);
-            ioForm->addRow(roleLabel);
-
-            for (const ModulePortDef &port : rolePorts) {
-                auto *check = new QCheckBox(ioBox);
-                const QString dir = port.isInput ? QStringLiteral("输入") : QStringLiteral("输出");
-                const QString typeName = Selt::dataTypeIdDisplayName(port.dataType);
-                const QString groupName = port.group.isEmpty()
-                    ? Selt::defaultPortGroup(port.dataType, port.isInput)
-                    : port.group;
-                check->setText(QStringLiteral("%1 · %2 · %3").arg(dir, typeName, groupName));
-                check->setToolTip(port.description.isEmpty()
-                                      ? port.name
-                                      : QStringLiteral("%1\n%2").arg(port.name, port.description));
-                const bool isExposed = exposed.contains(port.id);
-                check->setChecked(isExposed);
-                bool wired = false;
-                bool bound = false;
-                for (const ConnectionModel &conn : connections) {
-                    if ((conn.sourceNodeId == node.id && conn.sourcePortId == port.id)
-                        || (conn.targetNodeId == node.id && conn.targetPortId == port.id)) {
-                        wired = true;
-                        break;
-                    }
-                }
-                for (auto it = node.parameterBindings.constBegin();
-                     it != node.parameterBindings.constEnd(); ++it) {
-                    const QJsonObject binding = it.value().toObject();
-                    if (binding.value(QStringLiteral("sourceNodeId")).toString() == node.id
-                        && binding.value(QStringLiteral("sourcePortId")).toString() == port.id) {
-                        bound = true;
-                        break;
-                    }
-                }
-                if (wired)
-                    check->setText(check->text() + QStringLiteral("（已连接）"));
-                if (bound)
-                    check->setText(check->text() + QStringLiteral("（已绑定）"));
-                if (wired) {
-                    check->setEnabled(false);
-                    check->setChecked(true);
-                }
-                if (!port.exposable && !wired) {
-                    check->setEnabled(false);
-                    check->setToolTip(check->toolTip()
-                                      + QStringLiteral("\n该端口不可由用户隐藏"));
-                }
-                const QString portId = port.id;
-                connect(check, &QCheckBox::toggled, this, [this, portId](bool on) {
-                    if (m_nodeId.isEmpty() || !m_document || !m_document->hasNode(m_nodeId))
-                        return;
-                    NodeModel oldNode = m_document->node(m_nodeId);
-                    NodeModel newNode = oldNode;
-                    ModuleDescriptor d = VisionNodeRegistry::descriptor(oldNode.type);
-                    if (oldNode.type == VisionNodeIds::subflow()) {
-                        d.ports = Selt::modulePortsFromSubflowInterface(
-                            Selt::subflowInterfaceFromParameters(oldNode.parameters));
-                        d.hasExposureHints = true;
-                    }
-                    QStringList ids = oldNode.portExposureCustomized
-                        ? oldNode.exposedPortIds
-                        : Selt::defaultExposedPortIds(d);
-                    if (on && !ids.contains(portId))
-                        ids.append(portId);
-                    if (!on)
-                        ids.removeAll(portId);
-                    newNode.portExposureCustomized = true;
-                    newNode.exposedPortIds = ids;
-                    Selt::layoutExposedPorts(d, newNode, m_document->connections());
-                    const int visibleCount = qMax(ids.size(), 2);
-                    const qreal neededHeight = 48.0 + visibleCount * 18.0;
-                    if (neededHeight > newNode.size.height())
-                        newNode.size.setHeight(neededHeight);
-                    pushNodeChange(oldNode, newNode);
-                });
-                const QString label = port.name.isEmpty() ? port.id : port.name;
-                ioForm->addRow(label, check);
-            }
-        }
-
-        const int insertAt = qMax(0, m_dynamicLayout->count() - 1);
-        m_dynamicLayout->insertWidget(qMin(1, insertAt), ioBox);
-        m_paramGroups.insert(QStringLiteral("输入与输出"), ioBox);
-    }
-
-#if SELT_HAS_OPENCV
-    if (node.type == VisionNodeIds::subflow()) {
-        auto *subBox = new QGroupBox(QStringLiteral("子流程 Terminal"), m_dynamicWidget);
-        auto *subForm = new QFormLayout(subBox);
-        auto *flowEdit = new QLineEdit(subBox);
-        flowEdit->setText(node.parameters.value(QStringLiteral("flowId")).toString());
-        auto *nameEdit = new QLineEdit(subBox);
-        nameEdit->setText(node.parameters.value(QStringLiteral("displayName")).toString(
-            QStringLiteral("子流程")));
-        auto *ifaceEdit = new QTextEdit(subBox);
-        ifaceEdit->setPlaceholderText(
-            QStringLiteral("subflowInterface JSON（inputs/outputs/mappings）"));
-        ifaceEdit->setMaximumHeight(120);
-        const QJsonObject ifaceObj =
-            node.parameters.value(QStringLiteral("subflowInterface")).toObject();
-        ifaceEdit->setPlainText(
-            QString::fromUtf8(QJsonDocument(ifaceObj).toJson(QJsonDocument::Compact)));
-        subForm->addRow(QStringLiteral("内部流程ID"), flowEdit);
-        subForm->addRow(QStringLiteral("显示名"), nameEdit);
-        subForm->addRow(QStringLiteral("接口 JSON"), ifaceEdit);
-        auto *applyIfaceBtn = new QPushButton(QStringLiteral("应用接口并刷新端口"), subBox);
-        subForm->addRow(applyIfaceBtn);
-        connect(applyIfaceBtn, &QPushButton::clicked, this,
-                [this, flowEdit, nameEdit, ifaceEdit]() {
-                    if (m_nodeId.isEmpty() || !m_document || !m_document->hasNode(m_nodeId))
-                        return;
-                    NodeModel oldNode = m_document->node(m_nodeId);
-                    NodeModel newNode = oldNode;
-                    newNode.parameters.insert(QStringLiteral("flowId"), flowEdit->text().trimmed());
-                    newNode.parameters.insert(QStringLiteral("displayName"),
-                                             nameEdit->text().trimmed());
-                    QJsonParseError parseError;
-                    const QJsonDocument doc =
-                        QJsonDocument::fromJson(ifaceEdit->toPlainText().toUtf8(), &parseError);
-                    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-                        m_statusLabel->setText(QStringLiteral("子流程接口 JSON 无效"));
-                        return;
-                    }
-                    QString ifaceError;
-                    Selt::SubflowInterface iface =
-                        Selt::SubflowInterface::fromJson(doc.object(), &ifaceError);
-                    if (!ifaceError.isEmpty()) {
-                        m_statusLabel->setText(ifaceError);
-                        return;
-                    }
-                    if (iface.flowId.isEmpty())
-                        iface.flowId = flowEdit->text().trimmed();
-                    if (iface.displayName.isEmpty())
-                        iface.displayName = nameEdit->text().trimmed();
-                    if (!Selt::applySubflowInterfaceToNode(newNode, iface,
-                                                          m_document->connections())) {
-                        m_statusLabel->setText(QStringLiteral("子流程接口校验失败"));
-                        return;
-                    }
-                    if (!iface.displayName.isEmpty())
-                        newNode.text = iface.displayName;
-                    pushNodeChange(oldNode, newNode);
-                    loadFromNode(newNode);
-                });
-        m_dynamicLayout->insertWidget(qMin(2, m_dynamicLayout->count()), subBox);
-        m_paramGroups.insert(QStringLiteral("子流程 Terminal"), subBox);
-    }
-#endif
-
+    // ---- 基本 / ROI / 高级 / 调试（按需创建 Section）----
     for (const ModuleParamDef &param : params) {
         const QJsonValue value = node.parameters.contains(param.key)
             ? node.parameters.value(param.key)
             : param.defaultJsonValue();
 
         QWidget *constantEditor = nullptr;
+        bool hasSlider = false;
         switch (param.type) {
         case ModuleParamType::FilePath: {
             auto *row = new QWidget(m_dynamicWidget);
@@ -607,6 +456,7 @@ void PropertyPanel::rebuildDynamicParameters(const NodeModel &node)
             connect(spin, &QSpinBox::editingFinished, this, &PropertyPanel::applyDynamicParameters);
             constantEditor = spin;
             m_paramWidgets.insert(param.key, spin);
+            hasSlider = true;
             break;
         }
         case ModuleParamType::Double: {
@@ -618,6 +468,7 @@ void PropertyPanel::rebuildDynamicParameters(const NodeModel &node)
             connect(spin, &QDoubleSpinBox::editingFinished, this, &PropertyPanel::applyDynamicParameters);
             constantEditor = spin;
             m_paramWidgets.insert(param.key, spin);
+            hasSlider = true;
             break;
         }
         case ModuleParamType::Bool: {
@@ -721,38 +572,232 @@ void PropertyPanel::rebuildDynamicParameters(const NodeModel &node)
                 [this](const QString &key) { restoreConstantBinding(key); });
         m_bindingEditors.insert(param.key, bindingEditor);
 
-        auto *wrap = new QWidget(m_dynamicWidget);
-        wrap->setProperty("paramLabel", param.label);
-        wrap->setProperty("paramKey", param.key);
-        auto *wrapLayout = new QVBoxLayout(wrap);
-        wrapLayout->setContentsMargins(0, 0, 0, 0);
-        wrapLayout->setSpacing(2);
-        wrapLayout->addWidget(bindingEditor);
-        auto *resolved = new QLabel(wrap);
-        resolved->setObjectName(QStringLiteral("ResolvedValueLabel"));
-        QString stateText;
-        switch (binding.kind) {
-        case Selt::ParameterSourceKind::UpstreamBinding:
-            stateText = QStringLiteral("绑定态: 上游 %1.%2")
-                            .arg(binding.upstreamNodeId, binding.upstreamPortId);
-            break;
-        case Selt::ParameterSourceKind::ProjectVariable:
-            stateText = QStringLiteral("绑定态: 项目变量 %1").arg(binding.projectVariableId);
-            break;
-        case Selt::ParameterSourceKind::Constant:
-        default:
-            stateText = QStringLiteral("绑定态: 常量参数");
-            break;
-        }
-        if (!param.tooltip.isEmpty())
-            stateText += QStringLiteral(" | %1").arg(param.tooltip);
-        resolved->setText(stateText);
-        resolved->setWordWrap(true);
-        resolved->setStyleSheet(QStringLiteral("color: #9aa0a6; font-size: 11px;"));
-        wrapLayout->addWidget(resolved);
+        auto *compact = new CompactParamRow(param.label, bindingEditor, hasSlider, m_dynamicWidget);
+        compact->setProperty("paramKey", param.key);
+        compact->setBindingIndicator(binding.kind);
+        if (hasSlider)
+            connect(compact, &CompactParamRow::sliderEdited, this, &PropertyPanel::applyDynamicParameters);
+        m_paramRows.insert(param.key, compact);
 
-        formForGroup(param.group)->addRow(param.label, wrap);
+        const QString sectionName = classifyParamSection(param);
+        const bool defaultExpanded =
+            sectionName == QStringLiteral("基本") || sectionName == QStringLiteral("ROI");
+        CollapsibleSection *section = ensureSection(sectionName, defaultExpanded);
+        if (QVBoxLayout *bodyLayout = section->contentLayout())
+            bodyLayout->addWidget(compact);
     }
+
+    // ---- 子流程 ----
+    if (node.type == VisionNodeIds::subflow()) {
+        CollapsibleSection *subSection = ensureSection(QStringLiteral("子流程"), true);
+        QVBoxLayout *bodyLayout = subSection->contentLayout();
+        auto *subBox = new QWidget(subSection);
+        auto *subForm = new QFormLayout(subBox);
+        auto *flowEdit = new QLineEdit(subBox);
+        flowEdit->setText(node.parameters.value(QStringLiteral("flowId")).toString());
+        auto *nameEdit = new QLineEdit(subBox);
+        nameEdit->setText(node.parameters.value(QStringLiteral("displayName")).toString(
+            QStringLiteral("子流程")));
+        auto *ifaceEdit = new QTextEdit(subBox);
+        ifaceEdit->setPlaceholderText(
+            QStringLiteral("subflowInterface JSON（inputs/outputs/mappings）"));
+        ifaceEdit->setMaximumHeight(120);
+        const QJsonObject ifaceObj =
+            node.parameters.value(QStringLiteral("subflowInterface")).toObject();
+        ifaceEdit->setPlainText(
+            QString::fromUtf8(QJsonDocument(ifaceObj).toJson(QJsonDocument::Compact)));
+        subForm->addRow(QStringLiteral("内部流程ID"), flowEdit);
+        subForm->addRow(QStringLiteral("显示名"), nameEdit);
+        subForm->addRow(QStringLiteral("接口 JSON"), ifaceEdit);
+        auto *applyIfaceBtn = new QPushButton(QStringLiteral("应用接口并刷新端口"), subBox);
+        subForm->addRow(applyIfaceBtn);
+        connect(applyIfaceBtn, &QPushButton::clicked, this,
+                [this, flowEdit, nameEdit, ifaceEdit]() {
+                    if (m_nodeId.isEmpty() || !m_document || !m_document->hasNode(m_nodeId))
+                        return;
+                    NodeModel oldNode = m_document->node(m_nodeId);
+                    NodeModel newNode = oldNode;
+                    newNode.parameters.insert(QStringLiteral("flowId"), flowEdit->text().trimmed());
+                    newNode.parameters.insert(QStringLiteral("displayName"),
+                                             nameEdit->text().trimmed());
+                    QJsonParseError parseError;
+                    const QJsonDocument doc =
+                        QJsonDocument::fromJson(ifaceEdit->toPlainText().toUtf8(), &parseError);
+                    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                        setModuleStatusText(QStringLiteral("子流程接口 JSON 无效"));
+                        return;
+                    }
+                    QString ifaceError;
+                    Selt::SubflowInterface iface =
+                        Selt::SubflowInterface::fromJson(doc.object(), &ifaceError);
+                    if (!ifaceError.isEmpty()) {
+                        setModuleStatusText(ifaceError);
+                        return;
+                    }
+                    if (iface.flowId.isEmpty())
+                        iface.flowId = flowEdit->text().trimmed();
+                    if (iface.displayName.isEmpty())
+                        iface.displayName = nameEdit->text().trimmed();
+                    if (!Selt::applySubflowInterfaceToNode(newNode, iface,
+                                                          m_document->connections())) {
+                        setModuleStatusText(QStringLiteral("子流程接口校验失败"));
+                        return;
+                    }
+                    if (!iface.displayName.isEmpty())
+                        newNode.text = iface.displayName;
+                    pushNodeChange(oldNode, newNode);
+                    loadFromNode(newNode);
+                });
+        if (bodyLayout)
+            bodyLayout->addWidget(subBox);
+    }
+
+    // ---- 端口暴露（底部，默认折叠）----
+    {
+        CollapsibleSection *ioSection = ensureSection(QStringLiteral("端口暴露"), false);
+        QVBoxLayout *bodyLayout = ioSection->contentLayout();
+        auto *ioBox = new QWidget(ioSection);
+        auto *ioForm = new QFormLayout(ioBox);
+        ioForm->setContentsMargins(0, 0, 0, 0);
+        ioForm->setSpacing(4);
+
+        const QVector<ConnectionModel> connections = m_document ? m_document->connections()
+                                                               : QVector<ConnectionModel>{};
+        const QStringList exposed = Selt::resolveExposedPortIds(node, desc, connections);
+        QVector<ModulePortDef> portsForUi = desc.ports;
+        if (node.type == VisionNodeIds::subflow()) {
+            const Selt::SubflowInterface iface =
+                Selt::subflowInterfaceFromParameters(node.parameters);
+            const QVector<ModulePortDef> dynamicPorts =
+                Selt::modulePortsFromSubflowInterface(iface);
+            if (!dynamicPorts.isEmpty())
+                portsForUi = dynamicPorts;
+        }
+        auto *hint = new QLabel(
+            QStringLiteral("勾选后在画布显示。已连接端口会强制保留。"),
+            ioBox);
+        hint->setWordWrap(true);
+        hint->setStyleSheet(QStringLiteral("color: gray;"));
+        ioForm->addRow(hint);
+
+        auto *resetPortsBtn = new QPushButton(QStringLiteral("恢复默认端口布局"), ioBox);
+        ioForm->addRow(resetPortsBtn);
+        connect(resetPortsBtn, &QPushButton::clicked, this, [this]() {
+            if (m_nodeId.isEmpty() || !m_document || !m_document->hasNode(m_nodeId))
+                return;
+            NodeModel oldNode = m_document->node(m_nodeId);
+            NodeModel newNode = oldNode;
+            newNode.portExposureCustomized = false;
+            ModuleDescriptor d = VisionNodeRegistry::descriptor(oldNode.type);
+            if (oldNode.type == VisionNodeIds::subflow()) {
+                d.ports = Selt::modulePortsFromSubflowInterface(
+                    Selt::subflowInterfaceFromParameters(oldNode.parameters));
+                d.hasExposureHints = true;
+            }
+            Selt::syncNodePortExposure(newNode, d, m_document->connections());
+            Selt::layoutExposedPorts(d, newNode, m_document->connections());
+            pushNodeChange(oldNode, newNode);
+            loadFromNode(newNode);
+        });
+
+        const QList<Selt::PortRole> roleOrder = {Selt::PortRole::Primary, Selt::PortRole::Result,
+                                                Selt::PortRole::Debug};
+        for (Selt::PortRole role : roleOrder) {
+            QVector<ModulePortDef> rolePorts;
+            for (const ModulePortDef &port : portsForUi) {
+                if (port.role == role)
+                    rolePorts.append(port);
+            }
+            if (rolePorts.isEmpty())
+                continue;
+
+            auto *roleLabel = new QLabel(Selt::portRoleDisplayName(role), ioBox);
+            QFont roleFont = roleLabel->font();
+            roleFont.setBold(true);
+            roleLabel->setFont(roleFont);
+            ioForm->addRow(roleLabel);
+
+            for (const ModulePortDef &port : rolePorts) {
+                auto *check = new QCheckBox(ioBox);
+                const QString dir = port.isInput ? QStringLiteral("输入") : QStringLiteral("输出");
+                const QString typeName = Selt::dataTypeIdDisplayName(port.dataType);
+                const QString groupName = port.group.isEmpty()
+                    ? Selt::defaultPortGroup(port.dataType, port.isInput)
+                    : port.group;
+                check->setText(QStringLiteral("%1 · %2 · %3").arg(dir, typeName, groupName));
+                check->setToolTip(port.description.isEmpty()
+                                      ? port.name
+                                      : QStringLiteral("%1\n%2").arg(port.name, port.description));
+                const bool isExposed = exposed.contains(port.id);
+                check->setChecked(isExposed);
+                bool wired = false;
+                for (const ConnectionModel &conn : connections) {
+                    if ((conn.sourceNodeId == node.id && conn.sourcePortId == port.id)
+                        || (conn.targetNodeId == node.id && conn.targetPortId == port.id)) {
+                        wired = true;
+                        break;
+                    }
+                }
+                if (wired) {
+                    check->setText(check->text() + QStringLiteral("（已连接）"));
+                    check->setEnabled(false);
+                    check->setChecked(true);
+                }
+                if (!port.exposable && !wired) {
+                    check->setEnabled(false);
+                    check->setToolTip(check->toolTip()
+                                      + QStringLiteral("\n该端口不可由用户隐藏"));
+                }
+                const QString portId = port.id;
+                connect(check, &QCheckBox::toggled, this, [this, portId](bool on) {
+                    if (m_nodeId.isEmpty() || !m_document || !m_document->hasNode(m_nodeId))
+                        return;
+                    NodeModel oldNode = m_document->node(m_nodeId);
+                    NodeModel newNode = oldNode;
+                    ModuleDescriptor d = VisionNodeRegistry::descriptor(oldNode.type);
+                    if (oldNode.type == VisionNodeIds::subflow()) {
+                        d.ports = Selt::modulePortsFromSubflowInterface(
+                            Selt::subflowInterfaceFromParameters(oldNode.parameters));
+                        d.hasExposureHints = true;
+                    }
+                    QStringList ids = oldNode.portExposureCustomized
+                        ? oldNode.exposedPortIds
+                        : Selt::defaultExposedPortIds(d);
+                    if (on && !ids.contains(portId))
+                        ids.append(portId);
+                    if (!on)
+                        ids.removeAll(portId);
+                    newNode.portExposureCustomized = true;
+                    newNode.exposedPortIds = ids;
+                    Selt::layoutExposedPorts(d, newNode, m_document->connections());
+                    const int visibleCount = qMax(ids.size(), 2);
+                    const qreal neededHeight = 48.0 + visibleCount * 18.0;
+                    if (neededHeight > newNode.size.height())
+                        newNode.size.setHeight(neededHeight);
+                    pushNodeChange(oldNode, newNode);
+                });
+                const QString label = port.name.isEmpty() ? port.id : port.name;
+                ioForm->addRow(label, check);
+            }
+        }
+        if (bodyLayout)
+            bodyLayout->addWidget(ioBox);
+
+        // Keep port section at bottom.
+        m_dynamicLayout->removeWidget(ioSection);
+        m_dynamicLayout->insertWidget(qMax(0, m_dynamicLayout->count() - 1), ioSection);
+    }
+
+    // Hide empty optional sections (created only when needed, but keep safe).
+    for (const QString &name : {QStringLiteral("ROI"), QStringLiteral("高级"), QStringLiteral("调试")}) {
+        CollapsibleSection *section = m_sections.value(name);
+        if (!section)
+            continue;
+        QVBoxLayout *bodyLayout = section->contentLayout();
+        if (!bodyLayout || bodyLayout->count() == 0)
+            section->hide();
+    }
+
     applyParamFilter();
 #else
     Q_UNUSED(node);
@@ -762,21 +807,34 @@ void PropertyPanel::rebuildDynamicParameters(const NodeModel &node)
 void PropertyPanel::loadFromNode(const NodeModel &node)
 {
     blockSignalsRecursive(true);
-    m_typeLabel->setText(NodeBuilder::displayName(node.type));
 #if SELT_HAS_OPENCV
     if (VisionNodeIds::isVisionType(node.type)) {
         const ModuleDescriptor desc = VisionNodeRegistry::descriptor(node.type);
-        m_categoryLabel->setText(desc.category);
-        m_descLabel->setText(desc.description);
-    } else {
-        m_categoryLabel->setText(QStringLiteral("其他"));
-        m_descLabel->setText(QStringLiteral("非视觉模块（兼容旧文档）"));
+        if (m_header) {
+            const QString title = node.text.isEmpty()
+                ? NodeBuilder::displayName(node.type)
+                : node.text;
+            m_header->setNodeInfo(title,
+                                  desc.category,
+                                  desc.iconKey.isEmpty() ? desc.category : desc.iconKey);
+        }
+    } else if (m_header) {
+        const QString title = node.text.isEmpty()
+            ? NodeBuilder::displayName(node.type)
+            : node.text;
+        m_header->setNodeInfo(title,
+                              QStringLiteral("其他"),
+                              QString());
     }
 #else
-    m_categoryLabel->setText(QStringLiteral("-"));
-    m_descLabel->setText(QStringLiteral("OpenCV 未启用"));
+    if (m_header) {
+        const QString title = node.text.isEmpty()
+            ? NodeBuilder::displayName(node.type)
+            : node.text;
+        m_header->setNodeInfo(title, QStringLiteral("-"), QString());
+    }
 #endif
-    m_statusLabel->setText(QStringLiteral("未执行"));
+    // 不在每次参数重建时清零运行状态，由 MainWindow::syncSelectedModuleStatus 维护。
     m_textEdit->setText(node.text);
     m_lockedCheck->setChecked(node.locked);
     rebuildDynamicParameters(node);
@@ -810,7 +868,7 @@ QJsonObject PropertyPanel::collectDynamicParameters() const
         if (bindingEditor) {
             const Selt::ParameterBinding binding = bindingEditor->currentBinding();
             if (binding.kind != Selt::ParameterSourceKind::Constant)
-                continue; // keep previous constant snapshot for non-constant sources
+                continue;
         }
 
         QWidget *editor = m_paramWidgets.value(param.key, nullptr);
@@ -875,7 +933,6 @@ QJsonObject PropertyPanel::collectParameterBindings() const
             continue;
         Selt::ParameterBinding binding = editor->currentBinding();
         if (binding.kind == Selt::ParameterSourceKind::Constant) {
-            // Refresh constant payload from current editors.
             const QJsonObject params = collectDynamicParameters();
             const Selt::DataTypeId expected = binding.targetType;
             binding = Selt::ParameterBinding::legacyConstantBinding(params.value(it.key()), expected);
@@ -924,6 +981,11 @@ void PropertyPanel::applyDynamicParameters()
         if (param.type == ModuleParamType::RoiRect)
             updateRoiInfoLabel(param.key, newNode.parameters.value(param.key).toObject());
     }
+
+    for (auto it = m_bindingEditors.cbegin(); it != m_bindingEditors.cend(); ++it) {
+        if (CompactParamRow *row = m_paramRows.value(it.key()))
+            row->setBindingIndicator(it.value()->currentBinding().kind);
+    }
 #endif
     pushNodeChange(oldNode, newNode);
 }
@@ -946,6 +1008,9 @@ void PropertyPanel::restoreConstantBinding(const QString &key)
         : param->defaultJsonValue();
     editor->configure(*param, Selt::ParameterBinding::legacyConstantBinding(value, expected),
                       editor->constantEditor());
+    editor->setCompactMode(true);
+    if (CompactParamRow *row = m_paramRows.value(key))
+        row->setBindingIndicator(Selt::ParameterSourceKind::Constant);
     applyDynamicParameters();
 #else
     Q_UNUSED(key);
@@ -971,4 +1036,15 @@ void PropertyPanel::browseFilePath(const QString &key)
 #else
     Q_UNUSED(key);
 #endif
+}
+
+void PropertyPanel::copyParametersToClipboard()
+{
+    NodeModel node = currentNode();
+    if (node.id.isEmpty())
+        return;
+    const QByteArray bytes = QJsonDocument(node.parameters).toJson(QJsonDocument::Indented);
+    if (QClipboard *clipboard = QApplication::clipboard())
+        clipboard->setText(QString::fromUtf8(bytes));
+    emit copyParamsRequested(node.id);
 }

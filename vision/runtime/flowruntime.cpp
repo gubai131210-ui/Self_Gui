@@ -1,5 +1,6 @@
 #include "vision/runtime/flowruntime.h"
 
+#include "vision/model/portexposure.h"
 #include "vision/model/regiondata.h"
 #include "vision/model/roi.h"
 #include "vision/registry/visionnodeids.h"
@@ -525,7 +526,35 @@ bool FlowRuntime::executeOnce(const Document &document, VisionContext &context,
         moduleResult.diagnosticCode = result.diagnosticCode;
 
         for (auto it = result.outputs.cbegin(); it != result.outputs.cend(); ++it) {
+            const QString typeId = Selt::dataTypeIdToString(it.value().type());
+            moduleResult.outputTypes.insert(it.key(), typeId);
             moduleResult.outputSummary.insert(it.key(), it.value().debugString());
+
+            PortValueRecord record;
+            record.portId = it.key();
+            record.typeId = typeId;
+            record.valueSummary = it.value().displaySummary();
+            record.valueDetail = it.value().displayDetail();
+            record.status = QStringLiteral("ok");
+            if (const ModulePortDef *port = desc.findOutputPort(it.key())) {
+                record.displayName = port->name.isEmpty() ? it.key() : port->name;
+                record.category = port->group.isEmpty()
+                    ? Selt::defaultPortGroup(port->dataType, false)
+                    : port->group;
+            } else {
+                record.displayName = it.key();
+                record.category = Selt::defaultPortGroup(it.value().type(), false);
+            }
+            if (result.diagnosticCode == QLatin1String("backend_missing")
+                || result.diagnosticCode == QLatin1String("capability_limited")) {
+                record.status = QStringLiteral("capability_missing");
+            } else if (result.status == ModuleStatus::Failed) {
+                record.status = QStringLiteral("fail");
+            } else if (!result.diagnosticCode.isEmpty()
+                       && result.diagnosticCode != QLatin1String("none")) {
+                record.status = QStringLiteral("warn");
+            }
+            moduleResult.outputPortRecords.append(record);
         }
         if (!result.diagnosticCode.isEmpty())
             moduleResult.outputSummary.insert(QStringLiteral("diagnosticCode"), result.diagnosticCode);
@@ -533,6 +562,11 @@ bool FlowRuntime::executeOnce(const Document &document, VisionContext &context,
             currentImage = result.outputs.value(QStringLiteral("image")).toImage();
             moduleResult.outputImage = currentImage.clone();
             ++context.imageCopyCount;
+        }
+        if (result.outputs.contains(QStringLiteral("debug"))) {
+            const VisionImage dbg = result.outputs.value(QStringLiteral("debug")).toImage();
+            if (!dbg.isEmpty())
+                moduleResult.debugImage = dbg.clone();
         }
 
         storeExecutionOutputs(node, desc, result, &portStore);

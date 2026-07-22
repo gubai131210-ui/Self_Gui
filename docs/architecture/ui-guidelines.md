@@ -23,8 +23,9 @@
 
 - Modes: light, dark, system (`视图 → 主题`)
 - **Default mode: dark** (industrial workspace)
-- Dark industrial palette: charcoal panels + orange accent (`#ff8c00`)
-- Shared tokens: `Selt::UiStyle` (`accentOrange`, `connectionIdle/Active/Hover`, `gridMajorLine`)
+- Dark industrial palette: charcoal panels + orange accent (`#ff8c00`) in dark mode
+- Light industrial palette (default): soft gray panels + sky-blue accent (`#4a90d9`) and collapsible headers (`#dcecfa`)
+- Shared tokens: `Selt::UiStyle` (`accent` / legacy `accentOrange`, `sectionHeader*`, `connectionIdle/Active/Hover`, `gridMajorLine`)
 - Stylesheets: `resources/theme/theme_light.qss`, `theme_dark.qss`
 - Layout persistence keys: `ui/geometry`, `ui/windowState`, `ui/themeMode`, `ui/layoutVersion` (current=6), `ui/visionSplitterOrientation`, `ui/visionSplitterState`
 - Vision workbench: `视图 → 图像/结果左右布局`、`恢复图像与结果布局`

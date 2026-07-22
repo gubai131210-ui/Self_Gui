@@ -19,17 +19,20 @@ BindingEditor::BindingEditor(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
 
-    auto *top = new QHBoxLayout;
-    m_kindCombo = new QComboBox(this);
+    m_topRow = new QWidget(this);
+    auto *top = new QHBoxLayout(m_topRow);
+    top->setContentsMargins(0, 0, 0, 0);
+    top->setSpacing(4);
+    m_kindCombo = new QComboBox(m_topRow);
     m_kindCombo->addItem(QStringLiteral("常量"), static_cast<int>(Selt::ParameterSourceKind::Constant));
     m_kindCombo->addItem(QStringLiteral("上游输出"), static_cast<int>(Selt::ParameterSourceKind::UpstreamBinding));
     m_kindCombo->addItem(QStringLiteral("项目变量"), static_cast<int>(Selt::ParameterSourceKind::ProjectVariable));
-    m_typeHint = new QLabel(this);
+    m_typeHint = new QLabel(m_topRow);
     m_typeHint->setStyleSheet(QStringLiteral("color: gray;"));
-    top->addWidget(new QLabel(QStringLiteral("来源"), this));
+    top->addWidget(new QLabel(QStringLiteral("来源"), m_topRow));
     top->addWidget(m_kindCombo, 1);
     top->addWidget(m_typeHint);
-    layout->addLayout(top);
+    layout->addWidget(m_topRow);
 
     m_stack = new QStackedWidget(this);
     m_constantPage = new QWidget(m_stack);
@@ -124,6 +127,23 @@ void BindingEditor::configure(const ModuleParamDef &param, const Selt::Parameter
     rebuildSourceUi();
     m_block = false;
     updateDiagnostics();
+    setCompactMode(m_compact);
+}
+
+void BindingEditor::setCompactMode(bool compact)
+{
+    m_compact = compact;
+    if (m_topRow)
+        m_topRow->setVisible(!compact);
+    if (m_diagLabel)
+        m_diagLabel->setVisible(!compact);
+    if (m_restoreButton) {
+        // Restore button only meaningful when expanded and non-constant.
+        if (compact)
+            m_restoreButton->hide();
+        else
+            updateDiagnostics();
+    }
 }
 
 Selt::ParameterBinding BindingEditor::currentBinding() const

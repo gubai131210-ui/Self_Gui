@@ -145,7 +145,8 @@ QTabBar::tab {
 
 QTabBar::tab:selected {
     background: #ffffff;
-    border-bottom-color: #ffffff;
+    color: #1f2933;
+    border-bottom: 2px solid #4a90d9;
 }
 
 QPushButton {
@@ -169,4 +170,41 @@ QLabel#RunStatusLabel {
     padding: 2px 8px;
     border-radius: 10px;
     background: #eef2f6;
+}
+
+QLabel#ImageHudLabel {
+    color: #1a1d22;
+    background-color: #e8ecf0;
+    padding: 4px 10px;
+    border-top: 1px solid #c9d2dc;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+}
+
+/* Soft sky-blue collapsible headers (property / result panels). */
+QFrame#CollapsibleSectionHeader {
+    background-color: #dcecfa;
+    border: 1px solid #a3c9e8;
+    border-radius: 4px;
+}
+
+QFrame#CollapsibleSectionHeader:hover {
+    background-color: #c6e0f5;
+    border-color: #4a90d9;
+}
+
+QLabel#ResultDiagnosisLabel {
+    color: #1f2933;
+    background-color: #eef4fb;
+    border: 1px solid #c9d6e8;
+    border-radius: 4px;
+    padding: 6px 8px;
+}
+
+QLabel#ImageDiagnosisLabel {
+    color: #4b6278;
+    background-color: #f0f5fa;
+    border-top: 1px solid #d8dee6;
+    padding: 3px 8px;
+    font-size: 11px;
 }

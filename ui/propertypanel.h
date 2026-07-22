@@ -2,8 +2,10 @@
 #define PROPERTYPANEL_H
 
 #include "core/model/nodemodel.h"
+#include "graphics/items/nodegraphicsitem.h"
 
 #include <QHash>
+#include <QImage>
 #include <QWidget>
 
 #ifndef SELT_HAS_OPENCV
@@ -18,13 +20,13 @@ class Document;
 class QUndoStack;
 class QLineEdit;
 class QLabel;
-class QFormLayout;
 class QCheckBox;
-class QWidget;
 class QScrollArea;
 class QVBoxLayout;
-class QGroupBox;
 class BindingEditor;
+class InspectorHeader;
+class CollapsibleSection;
+class CompactParamRow;
 
 class PropertyPanel : public QWidget
 {
@@ -38,9 +40,17 @@ public:
     void setProjectVariables(const Selt::ProjectVariableStore *variables);
     void setSelectedNode(const QString &nodeId);
     void setModuleStatusText(const QString &text);
+    void setModuleRunStatus(NodeRunVisualStatus status, const QString &text);
+    void setResultThumbnail(const QImage &image);
+    void clearResultThumbnail();
     void applyRoiParameter(const QString &key, const QJsonObject &roiJson);
     /// 参数面板自身正在写回 Document 时为 true，避免 nodeUpdated 同步重建导致崩溃
     bool isApplyingChanges() const { return m_applyingChanges; }
+    QString currentNodeId() const { return m_nodeId; }
+
+signals:
+    void runNodeRequested(const QString &nodeId);
+    void copyParamsRequested(const QString &nodeId);
 
 private slots:
     void applyText();
@@ -78,6 +88,10 @@ private:
     QJsonObject collectParameterBindings() const;
     void pushNodeChange(const NodeModel &oldNode, const NodeModel &newNode);
     void restoreConstantBinding(const QString &key);
+    void copyParametersToClipboard();
+#if SELT_HAS_OPENCV
+    CollapsibleSection *ensureSection(const QString &title, bool defaultExpanded);
+#endif
 
     Document *m_document{nullptr};
     QUndoStack *m_undoStack{nullptr};
@@ -85,13 +99,10 @@ private:
     QString m_nodeId;
     int m_applyingChanges{0};
 
-    QLabel *m_typeLabel{nullptr};
-    QLabel *m_categoryLabel{nullptr};
-    QLabel *m_descLabel{nullptr};
-    QLabel *m_statusLabel{nullptr};
+    InspectorHeader *m_header{nullptr};
+    QLabel *m_thumbnail{nullptr};
     QLineEdit *m_textEdit{nullptr};
     QCheckBox *m_lockedCheck{nullptr};
-    QWidget *m_commonWidget{nullptr};
     QLineEdit *m_paramFilterEdit{nullptr};
     QCheckBox *m_boundOnlyCheck{nullptr};
     QScrollArea *m_dynamicScroll{nullptr};
@@ -99,7 +110,8 @@ private:
     QVBoxLayout *m_dynamicLayout{nullptr};
     QHash<QString, QWidget *> m_paramWidgets;
     QHash<QString, BindingEditor *> m_bindingEditors;
-    QHash<QString, QGroupBox *> m_paramGroups;
+    QHash<QString, CompactParamRow *> m_paramRows;
+    QHash<QString, CollapsibleSection *> m_sections;
 };
 
 #endif // PROPERTYPANEL_H

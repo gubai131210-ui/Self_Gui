@@ -63,6 +63,8 @@ signals:
     void statusMessage(const QString &message);
     /// Empty string clears toolbox type filter after connection drag ends.
     void connectionDataTypeFilterRequested(const QString &dataTypeId);
+    /// 任意入口（双击工具箱 / 拖放 / 右键菜单）成功创建节点后发出，供刷新「最近使用」。
+    void nodeTypeCreated(const QString &type);
 
 protected:
     void drawBackground(QPainter *painter, const QRectF &rect) override;

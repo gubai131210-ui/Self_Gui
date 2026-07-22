@@ -31,6 +31,12 @@ Configure 会打印 QR / barcode / Tesseract 状态。
 3. 工具箱「识别」分类可见两个算子；悬停可见后端能力提示
 4. 插入「二维码识别预览」模板，用含 QR 的图片运行
 5. OCR：未装 Tesseract 时应看到明确的能力受限诊断，而不是崩溃
+6. 运行结果页应显示结构化端口表（类型/值/状态），诊断区含策略与失败阶段
+7. 结果预览可切换：结果图 / 原图 / ROI / 预处理调试图
+
+## 相关文档
+
+- [industrial-operator-foundation.md](industrial-operator-foundation.md) — 下一阶段预处理/卡尺/模板/标定基础设计
 
 Tesseract 可选配置：
 

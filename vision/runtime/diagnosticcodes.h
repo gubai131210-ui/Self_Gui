@@ -20,6 +20,18 @@ inline QString regionEmpty() { return QStringLiteral("region_empty"); }
 inline QString degenerateGeometry() { return QStringLiteral("degenerate_geometry"); }
 /// Feature is wired but intentionally limited / passthrough.
 inline QString capabilityLimited() { return QStringLiteral("capability_limited"); }
+/// Required decoder backend missing at compile/runtime.
+inline QString backendMissing() { return QStringLiteral("backend_missing"); }
+/// Input image invalid for recognition (empty / unsupported format).
+inline QString imageInvalid() { return QStringLiteral("image_invalid"); }
+/// Detector found no candidate regions.
+inline QString noCandidate() { return QStringLiteral("no_candidate"); }
+/// Candidate region found but decode failed.
+inline QString decodeFailed() { return QStringLiteral("decode_failed"); }
+/// Decoded but quality/confidence below threshold.
+inline QString qualityLow() { return QStringLiteral("quality_low"); }
+/// Active calibration missing; length results remain in pixels.
+inline QString calibrationMissing() { return QStringLiteral("calibration_missing"); }
 /// Operator contract is registered, but no decoder backend is bundled yet.
 inline QString operatorNotImplemented() { return QStringLiteral("operator_not_implemented"); }
 /// Result exists but confidence is below configured threshold.

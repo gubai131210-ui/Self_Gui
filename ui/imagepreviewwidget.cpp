@@ -22,6 +22,26 @@
 
 namespace {
 constexpr qreal kHandleSize = 8.0;
+
+QString imageFormatName(QImage::Format format)
+{
+    switch (format) {
+    case QImage::Format_Grayscale8:
+        return QStringLiteral("Gray8");
+    case QImage::Format_Grayscale16:
+        return QStringLiteral("Gray16");
+    case QImage::Format_RGB32:
+    case QImage::Format_ARGB32:
+    case QImage::Format_ARGB32_Premultiplied:
+        return QStringLiteral("RGB32");
+    case QImage::Format_RGB888:
+        return QStringLiteral("RGB888");
+    case QImage::Format_Indexed8:
+        return QStringLiteral("Indexed8");
+    default:
+        return QStringLiteral("F%1").arg(int(format));
+    }
+}
 }
 
 ImageCanvasWidget::ImageCanvasWidget(QWidget *parent)
@@ -384,7 +404,10 @@ void ImageCanvasWidget::paintEvent(QPaintEvent *)
             QPolygonF poly;
             for (const QPointF &p : item.points)
                 poly << imageToWidget(p);
-            painter.drawPolyline(poly);
+            if (poly.size() >= 3)
+                painter.drawPolygon(poly);
+            else
+                painter.drawPolyline(poly);
         }
     }
 
@@ -684,7 +707,13 @@ ImagePreviewWidget::ImagePreviewWidget(QWidget *parent)
     m_overlayFilter->setToolTip(QStringLiteral("Overlay 显示过滤（仅影响预览）"));
     m_overlayFilter->setMinimumContentsLength(3);
 
+    m_previewSourceCombo = new QComboBox(toolbarHost);
+    m_previewSourceCombo->addItem(QStringLiteral("结果图"), 0);
+    m_previewSourceCombo->setToolTip(QStringLiteral("切换：原图 / ROI / 预处理 / 结果 / 调试图"));
+    m_previewSourceCombo->setMinimumContentsLength(5);
+
     toolbar->addWidget(m_titleLabel, 1);
+    toolbar->addWidget(m_previewSourceCombo);
     toolbar->addWidget(m_roiToolCombo);
     toolbar->addWidget(m_overlayFilter);
     toolbar->addWidget(m_fitBtn);
@@ -717,7 +746,41 @@ ImagePreviewWidget::ImagePreviewWidget(QWidget *parent)
 
     m_hudLabel = new QLabel(QStringLiteral("X: -  Y: -  |  RGB: -"), this);
     m_hudLabel->setObjectName(QStringLiteral("ImageHudLabel"));
+    // 不依赖主题是否加载成功：固定高对比底栏，避免与深色图像混叠。
+    m_hudLabel->setStyleSheet(
+        QStringLiteral(
+            "QLabel#ImageHudLabel {"
+            " color: %1;"
+            " background-color: %2;"
+            " padding: 4px 10px;"
+            " border-top: 1px solid %3;"
+            " font-family: Consolas, 'Courier New', monospace;"
+            " font-size: 12px;"
+            "}")
+            .arg(Selt::UiStyle::textPrimary().name(),
+                 Selt::UiStyle::panelBackground().name(),
+                 Selt::UiStyle::border().name()));
+    m_hudLabel->setMinimumHeight(24);
+    m_hudLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(m_hudLabel);
+
+    m_diagnosisLabel = new QLabel(QStringLiteral("诊断：-"), this);
+    m_diagnosisLabel->setObjectName(QStringLiteral("ImageDiagnosisLabel"));
+    m_diagnosisLabel->setWordWrap(true);
+    m_diagnosisLabel->setStyleSheet(
+        QStringLiteral("QLabel#ImageDiagnosisLabel { color: %1; background-color: %2;"
+                       " border-top: 1px solid %3; padding: 3px 8px; font-size: 11px; }")
+            .arg(Selt::UiStyle::textSecondary().name(),
+                 Selt::UiStyle::panelAltBackground().name(),
+                 Selt::UiStyle::border().name()));
+    layout->addWidget(m_diagnosisLabel);
+
+    // Keep cursor metadata physically outside the image canvas. This prevents
+    // bright/dark image content from reducing HUD readability.
+    layout->removeWidget(m_hudLabel);
+    layout->removeWidget(m_diagnosisLabel);
+    layout->insertWidget(1, m_hudLabel);
+    layout->insertWidget(2, m_diagnosisLabel);
     resetHud();
 
     connect(m_fitBtn, &QPushButton::clicked, m_canvas, &ImageCanvasWidget::fitToView);
@@ -733,6 +796,8 @@ ImagePreviewWidget::ImagePreviewWidget(QWidget *parent)
             this, &ImagePreviewWidget::onRoiToolChanged);
     connect(m_overlayFilter, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) { applyOverlayFilter(); });
+    connect(m_previewSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ImagePreviewWidget::onPreviewSourceChanged);
     connect(m_canvas, &ImageCanvasWidget::roiChanged, this, &ImagePreviewWidget::roiChanged);
     connect(m_canvas, &ImageCanvasWidget::extendedRoiChanged, this, &ImagePreviewWidget::extendedRoiChanged);
     connect(m_canvas, &ImageCanvasWidget::viewChanged, this, &ImagePreviewWidget::updateTitle);
@@ -759,14 +824,30 @@ void ImagePreviewWidget::resetHud()
     if (!m_hudLabel)
         return;
     const int zoomPct = m_canvas ? qRound(m_canvas->scale() * 100) : 100;
+    QString roiText = QStringLiteral("ROI:-");
+    if (m_canvas) {
+        const RoiRect roi = m_canvas->roi();
+        if (roi.enabled && roi.rect.isValid()) {
+            roiText = QStringLiteral("ROI:%1,%2 %3x%4")
+                          .arg(int(roi.rect.x()))
+                          .arg(int(roi.rect.y()))
+                          .arg(int(roi.rect.width()))
+                          .arg(int(roi.rect.height()));
+        }
+    }
     if (!m_canvas || m_canvas->image().isNull()) {
-        m_hudLabel->setText(QStringLiteral("X: -  Y: -  |  RGB: -  |  %1%  |  -x-").arg(zoomPct));
+        m_hudLabel->setText(QStringLiteral("X:- Y:- | RGB:- | %1% | -x- | %2 | fmt:-")
+                                .arg(zoomPct)
+                                .arg(roiText));
         return;
     }
-    m_hudLabel->setText(QStringLiteral("X: -  Y: -  |  RGB: -  |  %1%  |  %2x%3")
+    const QImage &image = m_canvas->image();
+    m_hudLabel->setText(QStringLiteral("X:- Y:- | RGB:- | %1% | %2x%3 | %4 | fmt:%5")
                             .arg(zoomPct)
-                            .arg(m_canvas->image().width())
-                            .arg(m_canvas->image().height()));
+                            .arg(image.width())
+                            .arg(image.height())
+                            .arg(roiText)
+                            .arg(imageFormatName(image.format())));
 }
 
 void ImagePreviewWidget::updateHud(const QPointF &pos, const QColor &pixel, bool valid)
@@ -780,6 +861,16 @@ void ImagePreviewWidget::updateHud(const QPointF &pos, const QColor &pixel, bool
 
     const QImage &image = m_canvas->image();
     const int zoomPct = qRound(m_canvas->scale() * 100);
+    QString roiText = QStringLiteral("ROI:-");
+    const RoiRect roi = m_canvas->roi();
+    if (roi.enabled && roi.rect.isValid()) {
+        roiText = QStringLiteral("ROI:%1,%2 %3x%4")
+                      .arg(int(roi.rect.x()))
+                      .arg(int(roi.rect.y()))
+                      .arg(int(roi.rect.width()))
+                      .arg(int(roi.rect.height()));
+    }
+    const QString fmt = imageFormatName(image.format());
     const bool grayscale = image.isGrayscale()
         || image.format() == QImage::Format_Grayscale8
         || image.format() == QImage::Format_Grayscale16
@@ -788,7 +879,7 @@ void ImagePreviewWidget::updateHud(const QPointF &pos, const QColor &pixel, bool
     if (grayscale) {
         const int gray = qGray(pixel.rgb());
         m_hudLabel->setText(
-            QStringLiteral("X: %1  Y: %2  |  Gray:%3  (R:%4 G:%5 B:%6)  |  %7%  |  %8x%9")
+            QStringLiteral("X:%1 Y:%2 | Gray:%3 (R:%4 G:%5 B:%6) | %7% | %8x%9 | %10 | fmt:%11")
                 .arg(qRound(pos.x()), 4, 10, QLatin1Char('0'))
                 .arg(qRound(pos.y()), 4, 10, QLatin1Char('0'))
                 .arg(gray, 3, 10, QLatin1Char('0'))
@@ -797,12 +888,14 @@ void ImagePreviewWidget::updateHud(const QPointF &pos, const QColor &pixel, bool
                 .arg(pixel.blue(), 3, 10, QLatin1Char('0'))
                 .arg(zoomPct)
                 .arg(image.width())
-                .arg(image.height()));
+                .arg(image.height())
+                .arg(roiText)
+                .arg(fmt));
         return;
     }
 
     m_hudLabel->setText(
-        QStringLiteral("X: %1  Y: %2  |  R:%3 G:%4 B:%5  |  %6%  |  %7x%8")
+        QStringLiteral("X:%1 Y:%2 | R:%3 G:%4 B:%5 | %6% | %7x%8 | %9 | fmt:%10")
             .arg(qRound(pos.x()), 4, 10, QLatin1Char('0'))
             .arg(qRound(pos.y()), 4, 10, QLatin1Char('0'))
             .arg(pixel.red(), 3, 10, QLatin1Char('0'))
@@ -810,7 +903,9 @@ void ImagePreviewWidget::updateHud(const QPointF &pos, const QColor &pixel, bool
             .arg(pixel.blue(), 3, 10, QLatin1Char('0'))
             .arg(zoomPct)
             .arg(image.width())
-            .arg(image.height()));
+            .arg(image.height())
+            .arg(roiText)
+            .arg(fmt));
 }
 
 void ImagePreviewWidget::onRoiToolChanged(int index)
@@ -820,10 +915,94 @@ void ImagePreviewWidget::onRoiToolChanged(int index)
     m_canvas->setRoiTool(tool);
 }
 
+void ImagePreviewWidget::onPreviewSourceChanged(int)
+{
+    applyDisplayedImage();
+}
+
+void ImagePreviewWidget::rebuildPreviewSourceCombo()
+{
+    if (!m_previewSourceCombo)
+        return;
+    const int previous = m_previewSourceCombo->currentData().toInt();
+    m_previewSourceCombo->blockSignals(true);
+    m_previewSourceCombo->clear();
+    m_previewSourceCombo->addItem(QStringLiteral("结果图"), 0);
+    if (!m_originalImage.isNull())
+        m_previewSourceCombo->addItem(QStringLiteral("原图"), 2);
+    if (!m_roiImage.isNull())
+        m_previewSourceCombo->addItem(QStringLiteral("ROI"), 3);
+    if (!m_preprocessImage.isNull() || !m_debugImage.isNull())
+        m_previewSourceCombo->addItem(
+            m_debugLabel.isEmpty() ? QStringLiteral("预处理/调试") : m_debugLabel, 1);
+    int restore = m_previewSourceCombo->findData(previous);
+    if (restore < 0)
+        restore = 0;
+    m_previewSourceCombo->setCurrentIndex(restore);
+    m_previewSourceCombo->blockSignals(false);
+}
+
+void ImagePreviewWidget::applyDisplayedImage()
+{
+    if (!m_canvas)
+        return;
+    const int mode = m_previewSourceCombo ? m_previewSourceCombo->currentData().toInt() : 0;
+    QImage image = m_resultImage;
+    if (mode == 1) {
+        image = !m_preprocessImage.isNull() ? m_preprocessImage : m_debugImage;
+    } else if (mode == 2) {
+        image = m_originalImage;
+    } else if (mode == 3) {
+        image = m_roiImage;
+    }
+    if (!image.isNull())
+        m_canvas->setImage(image);
+    // 切换层级时默认适应窗口，避免上一层缩放导致误判尺寸。
+    if (m_resetViewOnSourceChange && !image.isNull() && m_canvas->autoFitEnabled())
+        m_canvas->fitToView();
+    updateTitle();
+    resetHud();
+}
+
+void ImagePreviewWidget::setDiagnosisText(const QString &text)
+{
+    if (!m_diagnosisLabel)
+        return;
+    m_diagnosisLabel->setText(text.isEmpty() ? QStringLiteral("诊断：-") : text);
+}
+
+void ImagePreviewWidget::setDebugImage(const QImage &image, const QString &label)
+{
+    m_debugImage = image;
+    m_preprocessImage = image;
+    m_debugLabel = label.isEmpty() ? QStringLiteral("调试图") : label;
+    rebuildPreviewSourceCombo();
+}
+
+void ImagePreviewWidget::setPreviewLayers(const QImage &original,
+                                          const QImage &roiCrop,
+                                          const QImage &preprocess)
+{
+    m_originalImage = original;
+    m_roiImage = roiCrop;
+    if (!preprocess.isNull()) {
+        m_preprocessImage = preprocess;
+        m_debugImage = preprocess;
+    }
+    rebuildPreviewSourceCombo();
+    applyDisplayedImage();
+}
+
 void ImagePreviewWidget::setImage(const QImage &image, const QString &title)
 {
     if (!title.isEmpty())
         m_title = title;
+    m_resultImage = image;
+    if (m_previewSourceCombo) {
+        const int resultIndex = m_previewSourceCombo->findData(0);
+        if (resultIndex >= 0)
+            m_previewSourceCombo->setCurrentIndex(resultIndex);
+    }
     m_canvas->setImage(image);
     // Preserve user 1:1 / wheel zoom unless auto-fit mode is active.
     if (!image.isNull() && m_canvas->autoFitEnabled())
@@ -869,6 +1048,13 @@ void ImagePreviewWidget::clearImage()
 {
     m_title = QStringLiteral("图像预览");
     m_allOverlays.clear();
+    m_resultImage = QImage();
+    m_debugImage = QImage();
+    m_originalImage = QImage();
+    m_roiImage = QImage();
+    m_preprocessImage = QImage();
+    setDebugImage(QImage());
+    setDiagnosisText(QString());
     m_canvas->setImage(QImage());
     m_canvas->setOverlays({});
     m_canvas->clearRoi();

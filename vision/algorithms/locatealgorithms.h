@@ -57,6 +57,12 @@ struct TemplateMatchMultiOptions
     int maxCount{5};
     double nmsIoU{0.3};
     double nmsCenterDistance{0.0}; // 0 => half template diagonal
+    double scaleMin{1.0};
+    double scaleMax{1.0};
+    double scaleStep{0.1};
+    double angleMin{0.0};
+    double angleMax{0.0};
+    double angleStep{15.0};
 };
 
 class HoughLinesAlgorithm
@@ -133,7 +139,9 @@ public:
                       QVector<QPointF> &peaks,
                       QVector<double> &scores,
                       VisionImage &overlay,
-                      QString *error = nullptr);
+                      QString *error = nullptr,
+                      QVector<double> *outScales = nullptr,
+                      QVector<double> *outAngles = nullptr);
 };
 
 #endif // LOCATEALGORITHMS_H

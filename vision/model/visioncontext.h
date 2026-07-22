@@ -13,6 +13,18 @@
 #include <QStringList>
 #include <QVector>
 
+/// 结构化端口元信息：结果面板优先读取，避免从 debugString 反推类型/值。
+struct PortValueRecord
+{
+    QString portId;
+    QString displayName;
+    QString typeId;       ///< DataTypeId 字符串，如 Real / String / Image
+    QString category;     ///< 图像/叠加 | 几何 | 标量 | 元数据 …
+    QString valueSummary; ///< 表格摘要（短）
+    QString valueDetail;  ///< 详情/复制用（可与摘要相同）
+    QString status;       ///< ok | warn | fail | capability_missing
+};
+
 struct ModuleRunResult
 {
     QString nodeId;
@@ -20,6 +32,7 @@ struct ModuleRunResult
     QString displayName;
     ModuleStatus status{ModuleStatus::Idle};
     VisionImage outputImage;
+    VisionImage debugImage;
     OverlayList overlays;
     MeasurementResult measurement;
     QString errorMessage;
@@ -29,6 +42,10 @@ struct ModuleRunResult
     QString diagnosticCode;
     QHash<QString, QString> inputSummary;
     QHash<QString, QString> outputSummary;
+    /// portId -> DataTypeId 字符串（如 Real / String / Image），便于结果面板按类型展示与连线参考。
+    QHash<QString, QString> outputTypes;
+    /// 结构化端口表（新契约）；旧流程仅有 outputSummary 时结果面板回退解析。
+    QVector<PortValueRecord> outputPortRecords;
     qint64 elapsedMs{0};
 };
 

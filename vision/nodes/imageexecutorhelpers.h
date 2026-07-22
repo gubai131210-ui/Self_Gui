@@ -110,9 +110,12 @@ inline MeasurementResult applyCalibrationIfAny(const MeasurementResult &measure,
 
 /// Finalize a length-based measurement: source id, calibration (or keep px when absent).
 /// Does not invent physical units without a valid calibration snapshot.
+/// When calibration is missing, sets diagnosticCode=calibration_missing on the returned
+/// MeasurementResult via message, and caller may also set ExecutionResult.diagnosticCode.
 inline MeasurementResult finalizeLengthMeasurement(MeasurementResult measure,
                                                    const ExecutionRequest &request,
-                                                   ExecutionContext &context)
+                                                   ExecutionContext &context,
+                                                   QString *diagnosticCodeOut = nullptr)
 {
     measure.sourceNodeId = request.nodeId;
     if (measure.decisionState.isEmpty())
@@ -129,6 +132,8 @@ inline MeasurementResult finalizeLengthMeasurement(MeasurementResult measure,
         measure.calibrationId.clear();
         if (measure.message.isEmpty())
             measure.message = QStringLiteral("未标定：结果为像素单位");
+        if (diagnosticCodeOut && diagnosticCodeOut->isEmpty())
+            *diagnosticCodeOut = DiagnosticCodes::calibrationMissing();
     }
     return measure;
 }

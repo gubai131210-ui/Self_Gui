@@ -33,6 +33,10 @@ inline QString adaptiveThreshold() { return QStringLiteral("vision.adaptiveThres
 inline QString sobel() { return QStringLiteral("vision.sobel"); }
 inline QString colorConvert() { return QStringLiteral("vision.colorConvert"); }
 inline QString geometricTransform() { return QStringLiteral("vision.geometricTransform"); }
+inline QString gammaCorrect() { return QStringLiteral("vision.gammaCorrect"); }
+inline QString contrastBrightness() { return QStringLiteral("vision.contrastBrightness"); }
+inline QString claheEnhance() { return QStringLiteral("vision.claheEnhance"); }
+inline QString sharpen() { return QStringLiteral("vision.sharpen"); }
 
 // O2 region
 inline QString maskCombine() { return QStringLiteral("vision.maskCombine"); }

@@ -1,5 +1,7 @@
 #include "ui/theme/themecontroller.h"
 
+#include "ui/theme/uistyle.h"
+
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
@@ -35,6 +37,9 @@ void ThemeController::apply(QApplication *app)
     ThemeMode effective = m_mode;
     if (effective == ThemeMode::System)
         effective = preferDarkSystem() ? ThemeMode::Dark : ThemeMode::Light;
+
+    UiStyle::setActivePalette(effective == ThemeMode::Dark ? UiStyle::Palette::Dark
+                                                           : UiStyle::Palette::Light);
 
     app->setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QPalette palette = app->style()->standardPalette();
@@ -73,7 +78,7 @@ void ThemeController::loadFromSettings()
 {
     QSettings settings;
     m_mode = modeFromString(settings.value(QStringLiteral("ui/themeMode"),
-                                           modeToString(ThemeMode::Dark)).toString());
+                                           modeToString(ThemeMode::Light)).toString());
 }
 
 void ThemeController::saveToSettings() const

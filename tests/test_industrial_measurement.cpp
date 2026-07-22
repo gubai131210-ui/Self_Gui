@@ -1,11 +1,15 @@
 #include "vision/algorithms/caliperalgorithm.h"
 #include "vision/algorithms/circlemeasurementalgorithm.h"
 #include "vision/algorithms/linemeasurementalgorithm.h"
+#include "vision/algorithms/locatealgorithms.h"
+#include "vision/algorithms/preprocessalgorithms.h"
 #include "vision/algorithms/rectanglemeasurementalgorithm.h"
 #include "vision/model/measurementdefinition.h"
 #include "vision/model/visionimage.h"
+#include "vision/runtime/diagnosticcodes.h"
 #include "tests/metrologytesthelpers.h"
 
+#include <QtTest>
 #include <cmath>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -28,6 +32,9 @@ private slots:
     void caliperBaselineDistanceError();
     void fitCircleRejectsCollinear();
     void fitCircleRansacHandlesOutliers();
+    void preprocessGammaClaheSharpen();
+    void templateMatchScaleSearchFindsTarget();
+    void calibrationMissingCodeExists();
 };
 
 void TestIndustrialMeasurement::circleMeasuresFilledDisk()
@@ -188,6 +195,56 @@ void TestIndustrialMeasurement::fitCircleRansacHandlesOutliers()
     QVERIFY(absError(result.center.x(), c.x()) <= 1.5);
     QVERIFY(absError(result.center.y(), c.y()) <= 1.5);
     QVERIFY(result.inlierCount >= 30);
+}
+
+void TestIndustrialMeasurement::preprocessGammaClaheSharpen()
+{
+    cv::Mat mat(64, 64, CV_8UC1, cv::Scalar(80));
+    cv::rectangle(mat, cv::Rect(16, 16, 32, 32), cv::Scalar(200), cv::FILLED);
+    VisionImage input(mat);
+    VisionImage out;
+    QString err;
+    QVERIFY(GammaCorrectAlgorithm::apply(input, out, 0.7, &err));
+    QVERIFY(!out.isEmpty());
+    QVERIFY(ContrastBrightnessAlgorithm::apply(input, out, 1.4, 10.0, &err));
+    QVERIFY(!out.isEmpty());
+    QVERIFY(ClaheAlgorithm::apply(input, out, 2.0, 8, &err));
+    QVERIFY(!out.isEmpty());
+    QVERIFY(SharpenAlgorithm::apply(input, out, 0.8, 1.0, &err));
+    QVERIFY(!out.isEmpty());
+}
+
+void TestIndustrialMeasurement::templateMatchScaleSearchFindsTarget()
+{
+    cv::Mat scene(200, 200, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(scene, cv::Rect(70, 70, 40, 40), cv::Scalar(255), cv::FILLED);
+    cv::Mat templ(20, 20, CV_8UC1, cv::Scalar(255));
+    VisionImage image(scene);
+    VisionImage tmpl(templ);
+    TemplateMatchMultiOptions opts;
+    opts.minScore = 0.5;
+    opts.maxCount = 3;
+    opts.scaleMin = 1.5;
+    opts.scaleMax = 2.5;
+    opts.scaleStep = 0.5;
+    opts.angleMin = 0.0;
+    opts.angleMax = 0.0;
+    QVector<QPointF> peaks;
+    QVector<double> scores;
+    QVector<double> scales;
+    VisionImage overlay;
+    QString err;
+    QVERIFY(TemplateMatchMultiAlgorithm::apply(image, tmpl, opts, peaks, scores, overlay, &err,
+                                               &scales, nullptr));
+    QVERIFY(!peaks.isEmpty());
+    QVERIFY(!scores.isEmpty());
+    QVERIFY(!scales.isEmpty());
+    QVERIFY(scales.first() >= 1.5 && scales.first() <= 2.5 + 1e-6);
+}
+
+void TestIndustrialMeasurement::calibrationMissingCodeExists()
+{
+    QCOMPARE(Selt::DiagnosticCodes::calibrationMissing(), QStringLiteral("calibration_missing"));
 }
 
 QTEST_MAIN(TestIndustrialMeasurement)

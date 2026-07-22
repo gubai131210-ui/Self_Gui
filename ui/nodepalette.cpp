@@ -13,20 +13,24 @@
 #endif
 
 #include <QAbstractItemView>
+#include <QApplication>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDrag>
+#include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
-#include <QListWidgetItem>
 #include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QToolBox>
 #include <QToolButton>
 #include <QTreeView>
@@ -34,51 +38,87 @@
 
 namespace {
 
-constexpr char kNodeTypeMime[] = "application/x-selt-node-type";
+constexpr int kTileWidth = 92;
+constexpr int kTileHeight = 78;
 
-class OperatorIconList : public QListWidget
+/// Icon-mode tile. It intentionally uses only QToolButton's native mouse handling.
+/// The owner detects a double click from clicked() events, avoiding custom mouse
+/// event re-entry in Qt's button state machine.
+class OperatorTileButton : public QToolButton
 {
 public:
-    explicit OperatorIconList(QWidget *parent = nullptr)
-        : QListWidget(parent)
+    QString typeId;
+
+    explicit OperatorTileButton(QWidget *parent = nullptr)
+        : QToolButton(parent)
     {
-        setViewMode(QListView::IconMode);
-        setResizeMode(QListView::Adjust);
-        setMovement(QListView::Static);
-        setWrapping(true);
-        setWordWrap(true);
-        setSpacing(6);
-        setUniformItemSizes(true);
+        setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         setIconSize(QSize(Selt::UiStyle::toolboxIconSize, Selt::UiStyle::toolboxIconSize));
-        setGridSize(QSize(92, 78));
-        setDragEnabled(true);
-        setDragDropMode(QAbstractItemView::DragOnly);
-        setDefaultDropAction(Qt::CopyAction);
-        setSelectionMode(QAbstractItemView::SingleSelection);
+        setFixedSize(kTileWidth, kTileHeight);
+        setCheckable(false);
+        setAutoRaise(true);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::PointingHandCursor);
     }
 
 protected:
-    void startDrag(Qt::DropActions) override
+    void mousePressEvent(QMouseEvent *event) override
     {
-        QListWidgetItem *item = currentItem();
-        if (!item)
+        m_pressPos = event->position().toPoint();
+        m_dragStarted = false;
+        QToolButton::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (!(event->buttons() & Qt::LeftButton)
+            || typeId.isEmpty()
+            || m_dragStarted
+            || (event->position().toPoint() - m_pressPos).manhattanLength()
+                   < QApplication::startDragDistance()) {
+            QToolButton::mouseMoveEvent(event);
             return;
-        const QString type = item->data(Selt::NodeCatalogModel::TypeRole).toString();
-        if (type.isEmpty())
-            return;
+        }
+
+        m_dragStarted = true;
         auto *mime = new QMimeData;
-        mime->setData(QString::fromLatin1(kNodeTypeMime), type.toUtf8());
+        mime->setData(QStringLiteral("application/x-selt-node-type"), typeId.toUtf8());
+        mime->setText(text());
+
         auto *drag = new QDrag(this);
         drag->setMimeData(mime);
-        const QPixmap preview = item->icon().pixmap(Selt::UiStyle::toolboxIconSize,
-                                                    Selt::UiStyle::toolboxIconSize);
+        const QPixmap preview = icon().pixmap(Selt::UiStyle::toolboxIconSize,
+                                              Selt::UiStyle::toolboxIconSize);
         if (!preview.isNull()) {
             drag->setPixmap(preview);
             drag->setHotSpot(QPoint(preview.width() / 2, preview.height() / 2));
         }
         drag->exec(Qt::CopyAction);
+        m_dragStarted = false;
+        event->accept();
     }
+
+private:
+    QPoint m_pressPos;
+    bool m_dragStarted{false};
 };
+
+QScrollArea *makeIconPage(QWidget *parent, QGridLayout **outGrid)
+{
+    auto *scroll = new QScrollArea(parent);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *host = new QWidget(scroll);
+    auto *grid = new QGridLayout(host);
+    grid->setContentsMargins(4, 4, 4, 4);
+    grid->setSpacing(6);
+    grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    host->setLayout(grid);
+    scroll->setWidget(host);
+    *outGrid = grid;
+    return scroll;
+}
 
 } // namespace
 
@@ -180,12 +220,10 @@ NodePalette::NodePalette(QWidget *parent)
     connect(m_filterEdit, &QLineEdit::textChanged, this, &NodePalette::onFilterChanged);
     connect(m_typeFilter, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &NodePalette::onTypeFilterChanged);
-    // 单击只选中/预览；双击创建一次。不再同时连接 activated+doubleClicked，避免双击创建两个节点。
+    // List mode: click = preview, double-click / Enter = create (shared emitCreateIfValid).
     connect(m_tree, &QTreeView::clicked, this, &NodePalette::onTreeClicked);
     connect(m_tree, &QTreeView::doubleClicked, this, &NodePalette::onTreeCreateRequested);
     connect(m_tree, &QTreeView::activated, this, [this](const QModelIndex &index) {
-        // activated 在双击和 Enter 时都会触发；双击已由 doubleClicked 处理。
-        // 仅当焦点来自键盘（无近期双击）时创建，由短抑制窗口去重。
         onTreeCreateRequested(index);
     });
     connect(m_iconModeBtn, &QToolButton::toggled, this, [this](bool checked) {
@@ -213,6 +251,12 @@ void NodePalette::reloadCatalog()
         m_tree->expandToDepth(0);
 }
 
+void NodePalette::refreshPreferencesSections()
+{
+    // Defer icon-page rebuild until idle filter/mode change; create must not destroy tiles.
+    m_prefsDirty = true;
+}
+
 void NodePalette::requestCreate(const QString &type)
 {
     emitCreateIfValid(type);
@@ -221,6 +265,7 @@ void NodePalette::requestCreate(const QString &type)
 void NodePalette::onFilterChanged(const QString &text)
 {
     m_proxy->setFilterText(text);
+    m_prefsDirty = false;
     rebuildIconToolbox();
     if (!text.trimmed().isEmpty())
         m_tree->expandAll();
@@ -234,6 +279,7 @@ void NodePalette::onTypeFilterChanged(int index)
         return;
     const QString typeId = m_typeFilter->itemData(index).toString();
     m_proxy->setFilterDataType(typeId);
+    m_prefsDirty = false;
     rebuildIconToolbox();
     if (!typeId.isEmpty() || (m_filterEdit && !m_filterEdit->text().trimmed().isEmpty()))
         m_tree->expandAll();
@@ -267,43 +313,78 @@ void NodePalette::setIconMode(bool enabled)
         m_iconModeBtn->blockSignals(false);
     if (m_listModeBtn)
         m_listModeBtn->blockSignals(false);
+    if (enabled && m_prefsDirty) {
+        m_prefsDirty = false;
+        rebuildIconToolbox();
+    }
     if (m_stack)
         m_stack->setCurrentIndex(enabled ? 0 : 1);
 }
 
-void NodePalette::bindIconListActivation(QListWidget *list)
+void NodePalette::bindOperatorTile(QToolButton *tileBtn)
 {
-    if (!list)
+    auto *tile = static_cast<OperatorTileButton *>(tileBtn);
+    if (!tile)
         return;
-    // 单击：选中预览；双击：创建。不连接 itemActivated，避免与双击叠加。
-    connect(list, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
-        if (!item)
-            return;
-        const QString type = item->data(Selt::NodeCatalogModel::TypeRole).toString();
-        if (!type.isEmpty())
-            emit nodeTypeSelected(type);
-    });
-    connect(list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
-        if (!item)
-            return;
-        emitCreateIfValid(item->data(Selt::NodeCatalogModel::TypeRole).toString());
-    });
-    list->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(list, &QWidget::customContextMenuRequested, this, [this, list](const QPoint &pos) {
-        QListWidgetItem *item = list->itemAt(pos);
-        if (!item)
-            return;
-        const QString type = item->data(Selt::NodeCatalogModel::TypeRole).toString();
+    connect(tile, &QToolButton::clicked, this, [this, tile]() {
+        const QString type = tile->typeId;
         if (type.isEmpty())
             return;
-        QMenu menu(list);
-        const bool fav = Selt::OperatorPreferences::isFavorite(type);
-        menu.addAction(fav ? QStringLiteral("取消收藏") : QStringLiteral("加入收藏"), this, [this, type]() {
-            Selt::OperatorPreferences::toggleFavorite(type);
-            reloadCatalog();
-        });
-        menu.exec(list->mapToGlobal(pos));
+
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        emit nodeTypeSelected(type);
+
+        if (type == m_pendingTileType
+            && (now - m_pendingTileClickMs) <= QApplication::doubleClickInterval()) {
+            m_pendingTileType.clear();
+            m_pendingTileClickMs = 0;
+            emitCreateIfValid(type);
+            return;
+        }
+
+        m_pendingTileType = type;
+        m_pendingTileClickMs = now;
+        const QString pendingType = type;
+        const qint64 pendingAt = now;
+        QTimer::singleShot(QApplication::doubleClickInterval(), this,
+                           [this, pendingType, pendingAt]() {
+                               if (m_pendingTileType == pendingType
+                                   && m_pendingTileClickMs == pendingAt) {
+                                   m_pendingTileType.clear();
+                                   m_pendingTileClickMs = 0;
+                               }
+                           });
     });
+    tile->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tile, &QWidget::customContextMenuRequested, this, [this, tile](const QPoint &pos) {
+        if (tile->typeId.isEmpty())
+            return;
+        const QString type = tile->typeId;
+        QMenu menu(tile);
+        const bool fav = Selt::OperatorPreferences::isFavorite(type);
+        menu.addAction(fav ? QStringLiteral("取消收藏") : QStringLiteral("加入收藏"), this,
+                       [this, type]() {
+                           Selt::OperatorPreferences::toggleFavorite(type);
+                           m_prefsDirty = false;
+                           rebuildIconToolbox();
+                       });
+        menu.exec(tile->mapToGlobal(pos));
+    });
+}
+
+QToolButton *NodePalette::makeOperatorTile(const QString &type,
+                                           const QString &displayName,
+                                           const QIcon &icon,
+                                           const QString &toolTip,
+                                           QWidget *parent)
+{
+    auto *tile = new OperatorTileButton(parent);
+    tile->typeId = type;
+    tile->setText(displayName.isEmpty() ? type : displayName);
+    tile->setIcon(icon);
+    tile->setToolTip(toolTip);
+    bindOperatorTile(tile);
+    return tile;
 }
 
 void NodePalette::showEmptyIconState(const QString &message)
@@ -325,27 +406,29 @@ void NodePalette::rebuildIconToolbox()
     if (!m_toolBox || !m_proxy)
         return;
 
+    m_prefsDirty = false;
     m_emptyLabel = nullptr;
+    const QString currentTitle = m_toolBox->count() > 0
+        ? m_toolBox->itemText(m_toolBox->currentIndex())
+        : QString();
     while (m_toolBox->count() > 0) {
         QWidget *page = m_toolBox->widget(0);
         m_toolBox->removeItem(0);
-        delete page;
+        if (page)
+            page->deleteLater();
     }
 
-    auto addTypeList = [&](const QString &title, const QStringList &types, const QString &iconKey) {
+    auto addTypePage = [&](const QString &title, const QStringList &types, const QString &iconKey) {
         if (types.isEmpty())
             return;
-        auto *list = new OperatorIconList(m_toolBox);
+        QGridLayout *grid = nullptr;
+        QScrollArea *scroll = makeIconPage(m_toolBox, &grid);
+        int added = 0;
         for (const QString &type : types) {
 #if SELT_HAS_OPENCV
             const ModuleDescriptor desc = VisionNodeRegistry::descriptor(type);
             if (desc.typeId.isEmpty())
                 continue;
-            auto *item = new QListWidgetItem(
-                Selt::IconProvider::visionIcon(desc.iconKey.isEmpty() ? desc.category : desc.iconKey, 24),
-                desc.displayName.isEmpty() ? type : desc.displayName,
-                list);
-            item->setData(Selt::NodeCatalogModel::TypeRole, type);
             QString tip = desc.helpText.isEmpty() ? desc.description : desc.helpText;
             if (type == VisionNodeIds::barcodeDecode()) {
                 tip += QStringLiteral("\nQR: %1\nBarcode: %2")
@@ -354,60 +437,61 @@ void NodePalette::rebuildIconToolbox()
             } else if (type == VisionNodeIds::ocr()) {
                 tip += QStringLiteral("\nOCR: %1").arg(Selt::RecognitionCapability::ocrStatusText());
             }
-            item->setToolTip(tip);
+            auto *tile = makeOperatorTile(
+                type,
+                desc.displayName,
+                Selt::IconProvider::visionIcon(
+                    desc.iconKey.isEmpty() ? desc.category : desc.iconKey, 24),
+                tip,
+                scroll->widget());
 #else
-            auto *item = new QListWidgetItem(type, list);
-            item->setData(Selt::NodeCatalogModel::TypeRole, type);
+            auto *tile = makeOperatorTile(type, type, QIcon(), type, scroll->widget());
 #endif
-            item->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
-            item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
+            grid->addWidget(tile, 0, added);
+            ++added;
         }
-        if (list->count() == 0) {
-            delete list;
+        if (added == 0) {
+            delete scroll;
             return;
         }
-        bindIconListActivation(list);
-        m_toolBox->addItem(list, Selt::IconProvider::visionIcon(iconKey, 16), title);
+        m_toolBox->addItem(scroll, Selt::IconProvider::visionIcon(iconKey, 16), title);
     };
 
-    addTypeList(QStringLiteral("收藏"), Selt::OperatorPreferences::favorites(), QStringLiteral("模板"));
-    addTypeList(QStringLiteral("最近使用"), Selt::OperatorPreferences::recent(), QStringLiteral("输入"));
+    addTypePage(QStringLiteral("收藏"), Selt::OperatorPreferences::favorites(), QStringLiteral("模板"));
+    addTypePage(QStringLiteral("最近使用"), Selt::OperatorPreferences::recent(), QStringLiteral("输入"));
 
     const int categoryCount = m_proxy->rowCount(QModelIndex());
     int operatorCount = 0;
     for (int c = 0; c < categoryCount; ++c) {
         const QModelIndex categoryIndex = m_proxy->index(c, 0);
         const QString categoryName = categoryIndex.data(Qt::DisplayRole).toString();
-        auto *list = new OperatorIconList(m_toolBox);
-
+        QGridLayout *grid = nullptr;
+        QScrollArea *scroll = makeIconPage(m_toolBox, &grid);
+        int col = 0;
         const int childCount = m_proxy->rowCount(categoryIndex);
         for (int i = 0; i < childCount; ++i) {
             const QModelIndex child = m_proxy->index(i, 0, categoryIndex);
             const QString type = child.data(Selt::NodeCatalogModel::TypeRole).toString();
             if (type.isEmpty())
                 continue;
-            auto *item = new QListWidgetItem(child.data(Qt::DecorationRole).value<QIcon>(),
-                                             child.data(Qt::DisplayRole).toString(),
-                                             list);
-            item->setData(Selt::NodeCatalogModel::TypeRole, type);
-            item->setToolTip(child.data(Qt::ToolTipRole).toString());
-            item->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
-            item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
+            auto *tile = makeOperatorTile(type,
+                                          child.data(Qt::DisplayRole).toString(),
+                                          child.data(Qt::DecorationRole).value<QIcon>(),
+                                          child.data(Qt::ToolTipRole).toString(),
+                                          scroll->widget());
+            grid->addWidget(tile, 0, col++);
             ++operatorCount;
         }
-
-        if (list->count() == 0) {
-            delete list;
+        if (col == 0) {
+            delete scroll;
             continue;
         }
-
-        bindIconListActivation(list);
-        list->setProperty("seltCategory", categoryName);
+        scroll->setProperty("seltCategory", categoryName);
         const int stageRank = Selt::WorkflowTemplates::categoryStageRank(categoryName);
         const QString stageTitle = stageRank < 100
             ? QStringLiteral("%1 · %2").arg(stageRank + 1).arg(categoryName)
             : categoryName;
-        m_toolBox->addItem(list, Selt::IconProvider::visionIcon(categoryName, 16), stageTitle);
+        m_toolBox->addItem(scroll, Selt::IconProvider::visionIcon(categoryName, 16), stageTitle);
     }
 
     if (operatorCount == 0) {
@@ -418,6 +502,15 @@ void NodePalette::rebuildIconToolbox()
             showEmptyIconState(QStringLiteral("无匹配算子：%1").arg(filter));
     }
 
+    if (!currentTitle.isEmpty()) {
+        for (int i = 0; i < m_toolBox->count(); ++i) {
+            if (m_toolBox->itemText(i) == currentTitle) {
+                m_toolBox->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+
     updateIconColumns();
 }
 
@@ -426,11 +519,28 @@ void NodePalette::updateIconColumns()
     if (!m_toolBox)
         return;
     const int width = qMax(140, this->width() - 24);
-    const int columns = qBound(1, width / 96, 3);
-    const int gridW = qMax(72, width / columns - 4);
-    for (int i = 0; i < m_toolBox->count(); ++i) {
-        if (auto *list = qobject_cast<QListWidget *>(m_toolBox->widget(i)))
-            list->setGridSize(QSize(gridW, 78));
+    const int columns = qBound(1, width / (kTileWidth + 6), 4);
+
+    for (int page = 0; page < m_toolBox->count(); ++page) {
+        auto *scroll = qobject_cast<QScrollArea *>(m_toolBox->widget(page));
+        if (!scroll || !scroll->widget())
+            continue;
+        auto *grid = qobject_cast<QGridLayout *>(scroll->widget()->layout());
+        if (!grid)
+            continue;
+
+        QList<QWidget *> tiles;
+        while (grid->count() > 0) {
+            QLayoutItem *item = grid->takeAt(0);
+            if (item && item->widget())
+                tiles.append(item->widget());
+            delete item;
+        }
+        int index = 0;
+        for (QWidget *tile : tiles) {
+            grid->addWidget(tile, index / columns, index % columns);
+            ++index;
+        }
     }
 }
 
@@ -468,13 +578,20 @@ void NodePalette::emitCreateIfValid(const QString &type)
 {
     if (type.isEmpty())
         return;
-    // 同一 UI 事件内 activated 与 doubleClicked 可能各发一次：短窗口内同 type 只创建一次。
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (type == m_lastCreateType && (now - m_lastCreateMs) < 80)
+    if (type == m_lastCreateType && (now - m_lastCreateMs) < 120)
         return;
     m_lastCreateType = type;
     m_lastCreateMs = now;
-    emit nodeTypeActivated(type);
+
+    // Leave the UI event stack before creating (shared by icon tiles and tree).
+    const QString typeCopy = type;
+    QPointer<NodePalette> guard(this);
+    QTimer::singleShot(0, this, [guard, typeCopy]() {
+        if (!guard)
+            return;
+        emit guard->nodeTypeActivated(typeCopy);
+    });
 }
 
 QString NodePalette::typeAt(const QModelIndex &proxyIndex) const

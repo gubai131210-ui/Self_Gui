@@ -3,6 +3,7 @@
 #include "vision/algorithms/opencvguard.h"
 
 #include <QtGlobal>
+#include <QtMath>
 #include <opencv2/imgproc.hpp>
 
 namespace {
@@ -279,6 +280,96 @@ bool GeometricTransformAlgorithm::apply(const VisionImage &input,
                 cv::rotate(src, dst, rotateCode);
             else
                 cv::flip(src, dst, flipCode);
+        }, error)) {
+        return false;
+    }
+    out = VisionImage(dst, input.sourcePath());
+    return true;
+}
+
+bool GammaCorrectAlgorithm::apply(const VisionImage &input,
+                                  VisionImage &out,
+                                  double gamma,
+                                  QString *error)
+{
+    if (!requireInput(input, error))
+        return false;
+    const double g = qBound(0.05, 5.0, gamma);
+    cv::Mat dst;
+    if (!Selt::runOpenCv([&]() {
+            cv::Mat src8u;
+            input.mat().convertTo(src8u, CV_8U);
+            cv::Mat lut(1, 256, CV_8UC1);
+            for (int i = 0; i < 256; ++i)
+                lut.at<uchar>(i) = cv::saturate_cast<uchar>(
+                    qPow(double(i) / 255.0, 1.0 / g) * 255.0);
+            cv::LUT(src8u, lut, dst);
+        }, error)) {
+        return false;
+    }
+    out = VisionImage(dst, input.sourcePath());
+    return true;
+}
+
+bool ContrastBrightnessAlgorithm::apply(const VisionImage &input,
+                                        VisionImage &out,
+                                        double alpha,
+                                        double beta,
+                                        QString *error)
+{
+    if (!requireInput(input, error))
+        return false;
+    const double a = qBound(0.0, 5.0, alpha);
+    const double b = qBound(-255.0, 255.0, beta);
+    cv::Mat dst;
+    if (!Selt::runOpenCv([&]() {
+            input.mat().convertTo(dst, -1, a, b);
+        }, error)) {
+        return false;
+    }
+    out = VisionImage(dst, input.sourcePath());
+    return true;
+}
+
+bool ClaheAlgorithm::apply(const VisionImage &input,
+                           VisionImage &out,
+                           double clipLimit,
+                           int tileSize,
+                           QString *error)
+{
+    if (!requireInput(input, error))
+        return false;
+    const double clip = qBound(0.5, 40.0, clipLimit);
+    const int tile = qBound(2, 64, tileSize);
+    cv::Mat dst;
+    if (!Selt::runOpenCv([&]() {
+            const cv::Mat gray = toGrayMat(input.mat());
+            cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(clip, cv::Size(tile, tile));
+            clahe->apply(gray, dst);
+            if (input.mat().channels() > 1)
+                cv::cvtColor(dst, dst, cv::COLOR_GRAY2BGR);
+        }, error)) {
+        return false;
+    }
+    out = VisionImage(dst, input.sourcePath());
+    return true;
+}
+
+bool SharpenAlgorithm::apply(const VisionImage &input,
+                             VisionImage &out,
+                             double amount,
+                             double sigma,
+                             QString *error)
+{
+    if (!requireInput(input, error))
+        return false;
+    const double amt = qBound(0.0, 5.0, amount);
+    const double sig = qMax(0.1, sigma);
+    cv::Mat dst;
+    if (!Selt::runOpenCv([&]() {
+            cv::Mat blur;
+            cv::GaussianBlur(input.mat(), blur, cv::Size(0, 0), sig);
+            cv::addWeighted(input.mat(), 1.0 + amt, blur, -amt, 0, dst);
         }, error)) {
         return false;
     }

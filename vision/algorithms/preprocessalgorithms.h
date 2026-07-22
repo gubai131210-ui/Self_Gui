@@ -97,4 +97,43 @@ public:
                       QString *error = nullptr);
 };
 
+class GammaCorrectAlgorithm
+{
+public:
+    static bool apply(const VisionImage &input,
+                      VisionImage &out,
+                      double gamma,
+                      QString *error = nullptr);
+};
+
+class ContrastBrightnessAlgorithm
+{
+public:
+    static bool apply(const VisionImage &input,
+                      VisionImage &out,
+                      double alpha,
+                      double beta,
+                      QString *error = nullptr);
+};
+
+class ClaheAlgorithm
+{
+public:
+    static bool apply(const VisionImage &input,
+                      VisionImage &out,
+                      double clipLimit,
+                      int tileSize,
+                      QString *error = nullptr);
+};
+
+class SharpenAlgorithm
+{
+public:
+    static bool apply(const VisionImage &input,
+                      VisionImage &out,
+                      double amount,
+                      double sigma,
+                      QString *error = nullptr);
+};
+
 #endif // PREPROCESSALGORITHMS_H

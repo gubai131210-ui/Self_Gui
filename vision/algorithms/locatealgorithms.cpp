@@ -416,64 +416,117 @@ bool TemplateMatchMultiAlgorithm::apply(const VisionImage &image,
                                         QVector<QPointF> &peaks,
                                         QVector<double> &scores,
                                         VisionImage &overlay,
-                                        QString *error)
+                                        QString *error,
+                                        QVector<double> *outScales,
+                                        QVector<double> *outAngles)
 {
     if (!requireInput(image, error, QStringLiteral("搜索图像为空")))
         return false;
     if (!requireInput(templ, error, QStringLiteral("模板图像为空")))
         return false;
-    if (templ.width() > image.width() || templ.height() > image.height()) {
-        if (error)
-            *error = QStringLiteral("模板尺寸大于搜索图像");
-        return false;
-    }
 
     peaks.clear();
     scores.clear();
+    if (outScales)
+        outScales->clear();
+    if (outAngles)
+        outAngles->clear();
+
+    QVector<double> scales;
+    const double sMin = qMin(options.scaleMin, options.scaleMax);
+    const double sMax = qMax(options.scaleMin, options.scaleMax);
+    const double sStep = qMax(0.05, options.scaleStep);
+    if (qAbs(sMax - sMin) < 1e-6)
+        scales.append(sMin <= 0.0 ? 1.0 : sMin);
+    else {
+        for (double s = sMin; s <= sMax + 1e-6; s += sStep)
+            scales.append(s);
+        if (scales.isEmpty())
+            scales.append(1.0);
+    }
+
+    QVector<double> angles;
+    const double aMin = qMin(options.angleMin, options.angleMax);
+    const double aMax = qMax(options.angleMin, options.angleMax);
+    const double aStep = qMax(1.0, options.angleStep);
+    if (qAbs(aMax - aMin) < 1e-6)
+        angles.append(aMin);
+    else {
+        for (double a = aMin; a <= aMax + 1e-6; a += aStep)
+            angles.append(a);
+        if (angles.isEmpty())
+            angles.append(0.0);
+    }
+
     cv::Mat display;
     if (!Selt::runOpenCv([&]() {
             const cv::Mat grayImage = ensureGray8u(image.mat());
             const cv::Mat grayTempl = ensureGray8u(templ.mat());
-            cv::Mat result;
-            cv::matchTemplate(grayImage, grayTempl, result, cv::TM_CCOEFF_NORMED);
             display = toBgrDisplay(image.mat());
-
-            const int tw = templ.width();
-            const int th = templ.height();
-            const double halfDiag = 0.5 * std::hypot(tw, th);
-            const double centerNms = options.nmsCenterDistance > 0.0 ? options.nmsCenterDistance
-                                                                    : halfDiag;
-            const cv::Rect templRect(0, 0, tw, th);
 
             struct Candidate {
                 QPointF center;
                 double score{0.0};
+                double scale{1.0};
+                double angleDeg{0.0};
                 cv::Rect box;
             };
             QVector<Candidate> candidates;
-            cv::Mat work = result.clone();
-            for (int n = 0; n < options.maxCount * 4; ++n) {
-                double maxVal = 0.0;
-                cv::Point maxLoc;
-                cv::minMaxLoc(work, nullptr, &maxVal, nullptr, &maxLoc);
-                if (maxVal < options.minScore)
-                    break;
-                Candidate c;
-                c.score = maxVal;
-                // Keep top-left peak convention for historical port compatibility.
-                c.center = QPointF(maxLoc.x, maxLoc.y);
-                c.box = cv::Rect(maxLoc.x, maxLoc.y, tw, th);
-                candidates.append(c);
-                const int suppress = qMax(tw, th) / 2;
-                cv::rectangle(work,
-                              cv::Rect(qMax(0, maxLoc.x - suppress), qMax(0, maxLoc.y - suppress),
-                                       suppress * 2 + 1, suppress * 2 + 1)
-                                  & cv::Rect(0, 0, work.cols, work.rows),
-                              cv::Scalar(0), cv::FILLED);
+
+            for (double scale : scales) {
+                for (double angleDeg : angles) {
+                    cv::Mat warped;
+                    const cv::Point2f center(grayTempl.cols * 0.5f, grayTempl.rows * 0.5f);
+                    cv::Mat rot = cv::getRotationMatrix2D(center, angleDeg, scale);
+                    cv::Size warpedSize(int(std::lround(grayTempl.cols * scale)),
+                                       int(std::lround(grayTempl.rows * scale)));
+                    warpedSize.width = qMax(1, warpedSize.width);
+                    warpedSize.height = qMax(1, warpedSize.height);
+                    // Keep rotation around template center with scale baked into matrix.
+                    rot.at<double>(0, 2) += (warpedSize.width * 0.5) - center.x;
+                    rot.at<double>(1, 2) += (warpedSize.height * 0.5) - center.y;
+                    cv::warpAffine(grayTempl, warped, rot, warpedSize,
+                                   cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
+                    if (warped.cols < 3 || warped.rows < 3)
+                        continue;
+                    if (warped.cols > grayImage.cols || warped.rows > grayImage.rows)
+                        continue;
+
+                    cv::Mat result;
+                    cv::matchTemplate(grayImage, warped, result, cv::TM_CCOEFF_NORMED);
+                    cv::Mat work = result.clone();
+                    const int tw = warped.cols;
+                    const int th = warped.rows;
+                    for (int n = 0; n < options.maxCount * 2; ++n) {
+                        double maxVal = 0.0;
+                        cv::Point maxLoc;
+                        cv::minMaxLoc(work, nullptr, &maxVal, nullptr, &maxLoc);
+                        if (maxVal < options.minScore)
+                            break;
+                        Candidate c;
+                        c.score = maxVal;
+                        c.scale = scale;
+                        c.angleDeg = angleDeg;
+                        c.center = QPointF(maxLoc.x, maxLoc.y);
+                        c.box = cv::Rect(maxLoc.x, maxLoc.y, tw, th);
+                        candidates.append(c);
+                        const int suppress = qMax(tw, th) / 2;
+                        cv::rectangle(work,
+                                      cv::Rect(qMax(0, maxLoc.x - suppress),
+                                               qMax(0, maxLoc.y - suppress),
+                                               suppress * 2 + 1, suppress * 2 + 1)
+                                          & cv::Rect(0, 0, work.cols, work.rows),
+                                      cv::Scalar(0), cv::FILLED);
+                    }
+                }
             }
 
             std::sort(candidates.begin(), candidates.end(),
                       [](const Candidate &a, const Candidate &b) { return a.score > b.score; });
+
+            const double halfDiag = 0.5 * std::hypot(templ.width(), templ.height());
+            const double centerNms = options.nmsCenterDistance > 0.0 ? options.nmsCenterDistance
+                                                                    : halfDiag;
             QVector<Candidate> kept;
             for (const Candidate &c : candidates) {
                 bool suppressed = false;
@@ -494,12 +547,15 @@ bool TemplateMatchMultiAlgorithm::apply(const VisionImage &image,
             for (const Candidate &c : kept) {
                 peaks.append(c.center);
                 scores.append(c.score);
+                if (outScales)
+                    outScales->append(c.scale);
+                if (outAngles)
+                    outAngles->append(c.angleDeg);
                 cv::rectangle(display, c.box, cv::Scalar(0, 200, 255), 2);
                 cv::circle(display,
                            cv::Point(int(std::lround(c.center.x())), int(std::lround(c.center.y()))),
                            3, cv::Scalar(0, 0, 255), -1);
             }
-            Q_UNUSED(templRect);
         }, error)) {
         return false;
     }

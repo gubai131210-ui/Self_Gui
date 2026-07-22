@@ -1,6 +1,7 @@
 #ifndef NODEPALETTE_H
 #define NODEPALETTE_H
 
+#include <QIcon>
 #include <QString>
 #include <QWidget>
 #include <QtGlobal>
@@ -8,7 +9,6 @@
 class QLineEdit;
 class QComboBox;
 class QTreeView;
-class QListWidget;
 class QToolBox;
 class QStackedWidget;
 class QToolButton;
@@ -28,15 +28,17 @@ class NodePalette : public QWidget
 public:
     explicit NodePalette(QWidget *parent = nullptr);
     void reloadCatalog();
-    /// 统一创建入口（含短窗口去重）；供键盘 Enter 与测试调用。
+    /// Mark「最近使用」dirty; rebuilds on next filter/mode change (not on create).
+    void refreshPreferencesSections();
+    /// Unified create entry (deduped); used by list mode, icon tiles, and tests.
     void requestCreate(const QString &type);
-    /// 按数据类型筛选工具箱（空字符串恢复全部）。连线拖拽时可联动。
+    /// Filter toolbox by port data type (empty = all). Used during connection drag.
     void setDataTypeFilter(const QString &dataTypeId);
 
 signals:
-    /// 单击选中：仅预览/高亮，不创建节点。
+    /// Single click: preview only.
     void nodeTypeSelected(const QString &type);
-    /// 双击或 Enter：在画布视口中心创建一次节点。
+    /// Double-click / Enter: create once at canvas center.
     void nodeTypeActivated(const QString &type);
 
 protected:
@@ -54,8 +56,13 @@ private:
     void emitCreateIfValid(const QString &type);
     void rebuildIconToolbox();
     void updateIconColumns();
-    void bindIconListActivation(QListWidget *list);
     void showEmptyIconState(const QString &message);
+    void bindOperatorTile(QToolButton *tile);
+    QToolButton *makeOperatorTile(const QString &type,
+                                  const QString &displayName,
+                                  const QIcon &icon,
+                                  const QString &toolTip,
+                                  QWidget *parent);
 
     QLineEdit *m_filterEdit{nullptr};
     QComboBox *m_typeFilter{nullptr};
@@ -70,6 +77,9 @@ private:
     bool m_iconMode{true};
     bool m_userPreferIconMode{true};
     bool m_narrowForcedList{false};
+    bool m_prefsDirty{false};
+    QString m_pendingTileType;
+    qint64 m_pendingTileClickMs{0};
     QString m_lastCreateType;
     qint64 m_lastCreateMs{0};
 };

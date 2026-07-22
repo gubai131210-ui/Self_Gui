@@ -13,6 +13,7 @@ class QComboBox;
 class QLabel;
 class QPushButton;
 class QStackedWidget;
+class QWidget;
 
 #if !defined(SELT_HAS_OPENCV)
 #define SELT_HAS_OPENCV 0
@@ -29,6 +30,10 @@ public:
     void setCurrentNodeId(const QString &nodeId);
     void configure(const ModuleParamDef &param, const Selt::ParameterBinding &binding,
                    QWidget *constantEditor);
+
+    /// compact=true：只显示当前来源页，隐藏「来源」行与诊断（检查器紧凑模式）。
+    void setCompactMode(bool compact);
+    bool isCompactMode() const { return m_compact; }
 
     Selt::ParameterBinding currentBinding() const;
     QWidget *constantEditor() const { return m_constantEditor; }
@@ -66,7 +71,9 @@ private:
     QLabel *m_typeHint{nullptr};
     QLabel *m_diagLabel{nullptr};
     QPushButton *m_restoreButton{nullptr};
+    QWidget *m_topRow{nullptr};
     bool m_block{false};
+    bool m_compact{false};
 };
 
 #endif // BINDINGEDITOR_H

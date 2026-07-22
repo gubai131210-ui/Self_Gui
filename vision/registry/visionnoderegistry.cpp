@@ -584,23 +584,62 @@ static QVector<ModuleDescriptor> buildDescriptors()
             {QStringLiteral("found"), QStringLiteral("已找到"), false, Selt::DataTypeId::Bool, false,
              QStringLiteral("是否检测到目标")},
             {QStringLiteral("overlay"), QStringLiteral("叠加"), false, Selt::DataTypeId::Overlay, false,
-             QStringLiteral("框与文本叠加")}};
+             QStringLiteral("框与文本叠加")},
+            {QStringLiteral("strategy"), QStringLiteral("策略"), false, Selt::DataTypeId::String, false,
+             QStringLiteral("命中预处理策略"), QStringLiteral("Debug"), Selt::PortRole::Debug, false, true},
+            {QStringLiteral("attempts"), QStringLiteral("尝试次数"), false, Selt::DataTypeId::Int, false,
+             QStringLiteral("候选尝试次数"), QStringLiteral("Debug"), Selt::PortRole::Debug, false, true},
+            {QStringLiteral("failureStage"), QStringLiteral("失败阶段"), false, Selt::DataTypeId::String, false,
+             QStringLiteral("none/detect/decode/quality/backend"), QStringLiteral("Debug"),
+             Selt::PortRole::Debug, false, true},
+            {QStringLiteral("backendStatus"), QStringLiteral("后端状态"), false, Selt::DataTypeId::String, false,
+             QStringLiteral("QR/Barcode 能力状态"), QStringLiteral("Debug"), Selt::PortRole::Debug, false, true},
+            {QStringLiteral("debug"), QStringLiteral("调试图"), false, Selt::DataTypeId::Image, false,
+             QStringLiteral("最后一次候选预处理图"), QStringLiteral("Debug"), Selt::PortRole::Debug, false, true}};
         d.parameters = {
             makeEnumParam(QStringLiteral("symbology"), QStringLiteral("码制"),
                           {QStringLiteral("auto"), QStringLiteral("qr"), QStringLiteral("barcode")},
                           {QStringLiteral("自动"), QStringLiteral("二维码"), QStringLiteral("条码")},
                           QStringLiteral("auto"), 0, QStringLiteral("识别"),
-                          QStringLiteral("barcode 模式在缺少 OpenCV barcode 时返回 capability_limited")),
+                          QStringLiteral("barcode 模式在缺少 OpenCV barcode 时返回 backend_missing")),
             makeIntParam(QStringLiteral("maxCount"), QStringLiteral("最大候选数"), 8, 1, 64, 1,
                          QStringLiteral("识别")),
-            makeBoolParam(QStringLiteral("tryRotate"), QStringLiteral("尝试旋转"), false, 2,
+            makeEnumParam(QStringLiteral("enhanceMode"), QStringLiteral("增强模式"),
+                          {QStringLiteral("none"), QStringLiteral("auto"), QStringLiteral("full")},
+                          {QStringLiteral("关闭"), QStringLiteral("自动"), QStringLiteral("全力")},
+                          QStringLiteral("auto"), 2, QStringLiteral("识别"),
+                          QStringLiteral("自动：快速失败后再 CLAHE/锐化/自适应/反色")),
+            makeDoubleParam(QStringLiteral("scale"), QStringLiteral("基础缩放"), 1.0, 0.5, 4.0, 3,
+                            QStringLiteral("识别"), QStringLiteral("识别前放大，低分辨率场景建议 1.5~2.0")),
+            makeBoolParam(QStringLiteral("tryRotate"), QStringLiteral("尝试旋转"), true, 4,
                           QStringLiteral("识别"), QStringLiteral("未找到时尝试 90° 旋转再识别")),
-            makeBoolParam(QStringLiteral("passthroughOnFail"), QStringLiteral("失败透传图像"), true, 3,
+            makeBoolParam(QStringLiteral("tryInvert"), QStringLiteral("尝试反色"), true, 5,
+                          QStringLiteral("高级"), QStringLiteral("反光/白底黑码极性相反时有效")),
+            makeBoolParam(QStringLiteral("tryClahe"), QStringLiteral("CLAHE增强"), true, 6,
+                          QStringLiteral("高级"), QStringLiteral("亮度不均时提升局部对比度")),
+            makeBoolParam(QStringLiteral("tryAdaptive"), QStringLiteral("自适应二值化"), true, 7,
+                          QStringLiteral("高级")),
+            makeBoolParam(QStringLiteral("trySharpen"), QStringLiteral("锐化"), true, 8,
+                          QStringLiteral("高级")),
+            makeBoolParam(QStringLiteral("tryDenoise"), QStringLiteral("去噪"), false, 9,
+                          QStringLiteral("高级")),
+            makeIntParam(QStringLiteral("maxAttempts"), QStringLiteral("最大尝试次数"), 12, 1, 32, 10,
+                         QStringLiteral("高级")),
+            makeIntParam(QStringLiteral("maxTimeMs"), QStringLiteral("超时(ms)"), 800, 0, 10000, 11,
+                         QStringLiteral("高级"), QStringLiteral("0=不限制；困难图避免耗时失控")),
+            makeDoubleParam(QStringLiteral("minConfidence"), QStringLiteral("最低置信度"), 0.0, 0.0, 1.0, 12,
+                            QStringLiteral("高级")),
+            makeBoolParam(QStringLiteral("keepDebugImage"), QStringLiteral("保留调试图"), true, 13,
+                          QStringLiteral("调试")),
+            makeBoolParam(QStringLiteral("passthroughOnFail"), QStringLiteral("失败透传图像"), true, 14,
                           QStringLiteral("识别")),
-            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 4)};
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 15)};
         d.inputKeys = {QStringLiteral("image")};
         d.outputKeys = {QStringLiteral("image"), QStringLiteral("text"), QStringLiteral("confidence"),
-                        QStringLiteral("symbology"), QStringLiteral("found"), QStringLiteral("overlay")};
+                        QStringLiteral("symbology"), QStringLiteral("found"), QStringLiteral("overlay"),
+                        QStringLiteral("strategy"), QStringLiteral("attempts"),
+                        QStringLiteral("failureStage"), QStringLiteral("backendStatus"),
+                        QStringLiteral("debug")};
         d.uiSchema.previewLayers = {QStringLiteral("image"), QStringLiteral("geometry")};
         d.uiSchema.capabilityTags = {QStringLiteral("recognition")};
         list.append(d);
@@ -756,6 +795,60 @@ static QVector<ModuleDescriptor> buildDescriptors()
                            {QStringLiteral("flipY"), QStringLiteral("垂直翻转")},
                            {QStringLiteral("flipXY"), QStringLiteral("双向翻转")}},
                           QStringLiteral("rotate90"), 0)};
+        d.inputKeys = {QStringLiteral("image")};
+        d.outputKeys = {QStringLiteral("image")};
+        list.append(d);
+    }
+    {
+        ModuleDescriptor d = makeBase(VisionNodeIds::gammaCorrect(), QStringLiteral("Gamma校正"),
+                                      QStringLiteral("预处理"), QStringLiteral("非线性亮度校正"));
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("gamma"), QStringLiteral("Gamma"), 1.0, 0.05, 5.0, 0,
+                            QStringLiteral("基本"), QStringLiteral("<1 提亮暗部；>1 压暗")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 1),
+            makeRoiApplyModeParam(2)};
+        d.inputKeys = {QStringLiteral("image")};
+        d.outputKeys = {QStringLiteral("image")};
+        list.append(d);
+    }
+    {
+        ModuleDescriptor d = makeBase(VisionNodeIds::contrastBrightness(), QStringLiteral("对比度亮度"),
+                                      QStringLiteral("预处理"), QStringLiteral("线性对比度与亮度调整"));
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("alpha"), QStringLiteral("对比度"), 1.0, 0.0, 5.0, 0,
+                            QStringLiteral("基本")),
+            makeDoubleParam(QStringLiteral("beta"), QStringLiteral("亮度"), 0.0, -255.0, 255.0, 1,
+                            QStringLiteral("基本")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 2),
+            makeRoiApplyModeParam(3)};
+        d.inputKeys = {QStringLiteral("image")};
+        d.outputKeys = {QStringLiteral("image")};
+        list.append(d);
+    }
+    {
+        ModuleDescriptor d = makeBase(VisionNodeIds::claheEnhance(), QStringLiteral("CLAHE增强"),
+                                      QStringLiteral("预处理"), QStringLiteral("自适应直方图均衡"));
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("clipLimit"), QStringLiteral("裁剪限"), 2.0, 0.5, 40.0, 0,
+                            QStringLiteral("基本")),
+            makeIntParam(QStringLiteral("tileSize"), QStringLiteral("分块大小"), 8, 2, 64, 1,
+                         QStringLiteral("基本")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 2),
+            makeRoiApplyModeParam(3)};
+        d.inputKeys = {QStringLiteral("image")};
+        d.outputKeys = {QStringLiteral("image")};
+        list.append(d);
+    }
+    {
+        ModuleDescriptor d = makeBase(VisionNodeIds::sharpen(), QStringLiteral("锐化"),
+                                      QStringLiteral("预处理"), QStringLiteral("反锐化掩模增强边缘"));
+        d.parameters = {
+            makeDoubleParam(QStringLiteral("amount"), QStringLiteral("强度"), 0.5, 0.0, 5.0, 0,
+                            QStringLiteral("基本")),
+            makeDoubleParam(QStringLiteral("sigma"), QStringLiteral("模糊Sigma"), 1.0, 0.1, 10.0, 1,
+                            QStringLiteral("基本")),
+            makeRoiParam(QStringLiteral("roi"), QStringLiteral("ROI"), 2),
+            makeRoiApplyModeParam(3)};
         d.inputKeys = {QStringLiteral("image")};
         d.outputKeys = {QStringLiteral("image")};
         list.append(d);
@@ -971,16 +1064,32 @@ static QVector<ModuleDescriptor> buildDescriptors()
             {QStringLiteral("out"), QStringLiteral("图像"), false, Selt::DataTypeId::Image, false, {}},
             {QStringLiteral("center"), QStringLiteral("中心"), false, Selt::DataTypeId::Point2D, false, {}},
             {QStringLiteral("score"), QStringLiteral("得分"), false, Selt::DataTypeId::Real, false, {}},
-            {QStringLiteral("count"), QStringLiteral("数量"), false, Selt::DataTypeId::Int, false, {}}};
+            {QStringLiteral("count"), QStringLiteral("数量"), false, Selt::DataTypeId::Int, false, {}},
+            {QStringLiteral("scale"), QStringLiteral("尺度"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("angle"), QStringLiteral("角度"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("found"), QStringLiteral("已找到"), false, Selt::DataTypeId::Bool, false, {}}};
         d.parameters = {
             makeFileParam(QStringLiteral("templatePath"), QStringLiteral("模板路径"), 0),
             makeStringParam(QStringLiteral("templateResourceId"), QStringLiteral("模板资源ID"), {}, 1),
             makeDoubleParam(QStringLiteral("minScore"), QStringLiteral("最低得分"), 0.6, 0.0, 1.0, 2),
             makeIntParam(QStringLiteral("maxCount"), QStringLiteral("最大数量"), 5, 1, 100, 3),
             makeDoubleParam(QStringLiteral("nmsIoU"), QStringLiteral("NMS IoU"), 0.3, 0.0, 1.0, 4),
-            makeDoubleParam(QStringLiteral("nmsCenterDistance"), QStringLiteral("NMS中心距"), 0.0, 0.0, 1e6, 5)};
+            makeDoubleParam(QStringLiteral("nmsCenterDistance"), QStringLiteral("NMS中心距"), 0.0, 0.0, 1e6, 5),
+            makeDoubleParam(QStringLiteral("scaleMin"), QStringLiteral("最小尺度"), 1.0, 0.3, 3.0, 6,
+                            QStringLiteral("高级"), QStringLiteral("1.0 表示不搜索尺度")),
+            makeDoubleParam(QStringLiteral("scaleMax"), QStringLiteral("最大尺度"), 1.0, 0.3, 3.0, 7,
+                            QStringLiteral("高级")),
+            makeDoubleParam(QStringLiteral("scaleStep"), QStringLiteral("尺度步长"), 0.1, 0.05, 1.0, 8,
+                            QStringLiteral("高级")),
+            makeDoubleParam(QStringLiteral("angleMin"), QStringLiteral("最小角度"), 0.0, -180.0, 180.0, 9,
+                            QStringLiteral("高级"), QStringLiteral("与最大角相同则不搜索旋转")),
+            makeDoubleParam(QStringLiteral("angleMax"), QStringLiteral("最大角度"), 0.0, -180.0, 180.0, 10,
+                            QStringLiteral("高级")),
+            makeDoubleParam(QStringLiteral("angleStep"), QStringLiteral("角度步长"), 15.0, 1.0, 90.0, 11,
+                            QStringLiteral("高级"))};
         d.inputKeys = {QStringLiteral("image"), QStringLiteral("template")};
-        d.outputKeys = {QStringLiteral("image"), QStringLiteral("center"), QStringLiteral("score"), QStringLiteral("count")};
+        d.outputKeys = {QStringLiteral("image"), QStringLiteral("center"), QStringLiteral("score"),
+                        QStringLiteral("count"), QStringLiteral("scale"), QStringLiteral("angle")};
         list.append(d);
     }
     {
@@ -1057,6 +1166,11 @@ static QVector<ModuleDescriptor> buildDescriptors()
             {QStringLiteral("out"), QStringLiteral("图像"), false, Selt::DataTypeId::Image, false, {}},
             {QStringLiteral("distance"), QStringLiteral("距离"), false, Selt::DataTypeId::Real, false, {}},
             {QStringLiteral("point"), QStringLiteral("边缘点"), false, Selt::DataTypeId::Point2D, false, {}},
+            {QStringLiteral("point2"), QStringLiteral("第二边缘"), false, Selt::DataTypeId::Point2D, false, {}},
+            {QStringLiteral("edgeStrength"), QStringLiteral("边缘强度"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("confidence"), QStringLiteral("置信度"), false, Selt::DataTypeId::Real, false, {}},
+            {QStringLiteral("unit"), QStringLiteral("单位"), false, Selt::DataTypeId::String, false, {}},
+            {QStringLiteral("calibrationId"), QStringLiteral("标定"), false, Selt::DataTypeId::String, false, {}},
             {QStringLiteral("measurement"), QStringLiteral("测量"), false, Selt::DataTypeId::Measurement, false, {}}};
         d.parameters = {
             makeDoubleParam(QStringLiteral("cx"), QStringLiteral("中心X"), 0.0, -1e9, 1e9, 0,

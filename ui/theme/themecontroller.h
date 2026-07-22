@@ -36,7 +36,7 @@ private:
     bool preferDarkSystem() const;
     QString styleSheetFor(ThemeMode effective) const;
 
-    ThemeMode m_mode{ThemeMode::Dark};
+    ThemeMode m_mode{ThemeMode::Light};
 };
 
 } // namespace Selt

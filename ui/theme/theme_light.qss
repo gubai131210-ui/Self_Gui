@@ -145,7 +145,8 @@ QTabBar::tab {
 
 QTabBar::tab:selected {
     background: #ffffff;
-    border-bottom-color: #ffffff;
+    color: #1f2933;
+    border-bottom: 2px solid #4a90d9;
 }
 
 QPushButton {
@@ -171,36 +172,39 @@ QLabel#RunStatusLabel {
     background: #eef2f6;
 }
 
-QPushButton#ImageToolbarButton {
-    min-width: 28px;
-    max-height: 26px;
-    padding: 2px 6px;
+QLabel#ImageHudLabel {
+    color: #1a1d22;
+    background-color: #e8ecf0;
+    padding: 4px 10px;
+    border-top: 1px solid #c9d2dc;
+    font-family: Consolas, "Courier New", monospace;
     font-size: 12px;
 }
 
-QSplitter::handle {
-    background: #c9d2dc;
+/* Soft sky-blue collapsible headers (property / result panels). */
+QFrame#CollapsibleSectionHeader {
+    background-color: #dcecfa;
+    border: 1px solid #a3c9e8;
+    border-radius: 4px;
 }
 
-QSplitter::handle:hover {
-    background: #ff8c00;
+QFrame#CollapsibleSectionHeader:hover {
+    background-color: #c6e0f5;
+    border-color: #4a90d9;
 }
 
-QSplitter::handle:horizontal {
-    width: 8px;
+QLabel#ResultDiagnosisLabel {
+    color: #1f2933;
+    background-color: #eef4fb;
+    border: 1px solid #c9d6e8;
+    border-radius: 4px;
+    padding: 6px 8px;
 }
 
-QSplitter::handle:vertical {
-    height: 8px;
-}
-
-QTabBar#FlowTabBar::tab:selected {
-    background: #fff4e6;
-    color: #8a4b00;
-    border: 1px solid #ff8c00;
-}
-
-QLabel#ToolboxEmptyLabel {
-    color: #6a737c;
-    padding: 16px;
+QLabel#ImageDiagnosisLabel {
+    color: #4b6278;
+    background-color: #f0f5fa;
+    border-top: 1px solid #d8dee6;
+    padding: 3px 8px;
+    font-size: 11px;
 }

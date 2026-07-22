@@ -65,6 +65,7 @@ QJsonObject RunRecord::toJson(bool includeImage) const
     obj.insert(QStringLiteral("status"), runRecordStatusCode(status));
     obj.insert(QStringLiteral("inputSummary"), hashToJson(inputSummary));
     obj.insert(QStringLiteral("outputSummary"), hashToJson(outputSummary));
+    obj.insert(QStringLiteral("outputTypes"), hashToJson(outputTypes));
     obj.insert(QStringLiteral("elapsedMs"), static_cast<double>(elapsedMs));
     obj.insert(QStringLiteral("diagnosticCode"), diagnosticCode);
     obj.insert(QStringLiteral("failureKind"), failureKind);
@@ -86,6 +87,7 @@ RunRecord RunRecord::fromJson(const QJsonObject &obj)
     record.status = runRecordStatusFromCode(obj.value(QStringLiteral("status")).toString());
     record.inputSummary = hashFromJson(obj.value(QStringLiteral("inputSummary")).toObject());
     record.outputSummary = hashFromJson(obj.value(QStringLiteral("outputSummary")).toObject());
+    record.outputTypes = hashFromJson(obj.value(QStringLiteral("outputTypes")).toObject());
     record.elapsedMs = static_cast<qint64>(obj.value(QStringLiteral("elapsedMs")).toDouble());
     record.diagnosticCode = obj.value(QStringLiteral("diagnosticCode")).toString();
     record.failureKind = obj.value(QStringLiteral("failureKind")).toString();
@@ -102,6 +104,7 @@ RunRecord RunRecord::fromModuleResult(const ModuleRunResult &result, RunRecordIm
     record.status = result.status;
     record.inputSummary = result.inputSummary;
     record.outputSummary = result.outputSummary;
+    record.outputTypes = result.outputTypes;
     record.overlays = result.overlays;
     record.elapsedMs = result.elapsedMs;
     record.diagnosticCode = result.diagnosticCode;

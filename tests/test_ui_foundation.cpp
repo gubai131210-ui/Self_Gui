@@ -20,6 +20,7 @@ private slots:
     void themeApplyDoesNotCrash();
     void industrialUiTokensExist();
     void layoutVersionAndDockMins();
+    void lightThemeSectionTokens();
     void nodeCatalogEmptyWithoutOpenCv();
     void nodeCatalogMimeType();
     void nodeCatalogProxyFilter();
@@ -61,21 +62,27 @@ void TestUiFoundation::themeApplyDoesNotCrash()
     Selt::ThemeController controller;
     controller.setMode(Selt::ThemeMode::Light);
     controller.apply(qApp);
+    QVERIFY(!qApp->styleSheet().isEmpty());
+    QVERIFY(qApp->styleSheet().contains(QStringLiteral("4a90d9"))
+            || qApp->styleSheet().contains(QStringLiteral("#4a90d9"))
+            || qApp->styleSheet().contains(QStringLiteral("dcecfa")));
     controller.setMode(Selt::ThemeMode::Dark);
-    controller.apply(qApp);
-    controller.setMode(Selt::ThemeMode::System);
     controller.apply(qApp);
     QVERIFY(qApp->styleSheet().contains(QStringLiteral("ff8c00"))
             || qApp->styleSheet().contains(QStringLiteral("#ff8c00"))
             || !qApp->styleSheet().isEmpty());
+    controller.setMode(Selt::ThemeMode::System);
+    controller.apply(qApp);
+    QVERIFY(!qApp->styleSheet().isEmpty());
 }
 
 void TestUiFoundation::industrialUiTokensExist()
 {
+    Selt::UiStyle::setActivePalette(Selt::UiStyle::Palette::Dark);
     QVERIFY(Selt::UiStyle::accentOrange().isValid());
     QCOMPARE(Selt::UiStyle::accentOrange().name(QColor::HexRgb), QStringLiteral("#ff8c00"));
     QCOMPARE(Selt::UiStyle::leftDockDefaultWidth, 280);
-    QCOMPARE(Selt::UiStyle::rightDockDefaultWidth, 400);
+    QCOMPARE(Selt::UiStyle::rightDockDefaultWidth, 360);
     QVERIFY(Selt::UiStyle::leftDockMinWidth < Selt::UiStyle::leftDockDefaultWidth);
     QVERIFY(Selt::UiStyle::rightDockMinWidth < Selt::UiStyle::rightDockDefaultWidth);
     QVERIFY(Selt::UiStyle::centralMinWidth >= 320);
@@ -83,8 +90,19 @@ void TestUiFoundation::industrialUiTokensExist()
 
 void TestUiFoundation::layoutVersionAndDockMins()
 {
-    QCOMPARE(Selt::UiStyle::windowLayoutVersion, 6);
+    QCOMPARE(Selt::UiStyle::windowLayoutVersion, 8);
     QVERIFY(Selt::UiStyle::imageToolbarHeight >= 28);
+}
+
+void TestUiFoundation::lightThemeSectionTokens()
+{
+    Selt::UiStyle::setActivePalette(Selt::UiStyle::Palette::Light);
+    QCOMPARE(Selt::UiStyle::sectionHeaderBackground().name(QColor::HexRgb), QStringLiteral("#dcecfa"));
+    QCOMPARE(Selt::UiStyle::sectionHeaderHover().name(QColor::HexRgb), QStringLiteral("#c6e0f5"));
+    QCOMPARE(Selt::UiStyle::accent().name(QColor::HexRgb), QStringLiteral("#4a90d9"));
+    QVERIFY(Selt::UiStyle::successGreen().isValid());
+    QVERIFY(Selt::UiStyle::failRed().isValid());
+    QVERIFY(Selt::UiStyle::successGreen() != Selt::UiStyle::failRed());
 }
 
 void TestUiFoundation::nodeCatalogEmptyWithoutOpenCv()

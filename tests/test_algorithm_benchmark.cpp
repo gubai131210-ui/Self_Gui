@@ -2,6 +2,7 @@
 #include "vision/algorithms/caliperalgorithm.h"
 #include "vision/algorithms/circlemeasurementalgorithm.h"
 #include "vision/algorithms/locatealgorithms.h"
+#include "vision/algorithms/recognitionalgorithms.h"
 #include "vision/nodes/builtinexecutors.h"
 #include "vision/registry/visionnodeids.h"
 #include "vision/registry/visionnoderegistry.h"
@@ -15,6 +16,9 @@
 #include <QtTest>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+#if defined(SELT_HAS_OPENCV_QR) && SELT_HAS_OPENCV_QR
+#include <opencv2/objdetect.hpp>
+#endif
 
 using namespace Selt;
 using namespace Selt::MetrologyTest;
@@ -34,6 +38,7 @@ private slots:
     void singleNodeBaselines();
     void tenNodeDagBaseline();
     void roiVsFullImage();
+    void recognitionStrategyBaselines();
 };
 
 void TestAlgorithmBenchmark::initTestCase()
@@ -155,6 +160,56 @@ void TestAlgorithmBenchmark::roiVsFullImage()
     qDebug("benchmark ROI vs full Debug ms: full=%lld roi=%lld",
            static_cast<long long>(fullMs), static_cast<long long>(roiMs));
     QVERIFY(roiMs <= fullMs + 50); // allow timer noise
+}
+
+void TestAlgorithmBenchmark::recognitionStrategyBaselines()
+{
+    if (!RecognitionCapability::hasQrBackend())
+        QSKIP("OpenCV QR backend unavailable");
+#if defined(SELT_HAS_OPENCV_QR) && SELT_HAS_OPENCV_QR
+    cv::Mat mat(240, 240, CV_8UC3, cv::Scalar(255, 255, 255));
+    cv::QRCodeEncoder::Params params;
+    auto encoder = cv::QRCodeEncoder::create(params);
+    cv::Mat qr;
+    encoder->encode("SELT-BENCH", qr);
+    QVERIFY(!qr.empty());
+    cv::Mat resized;
+    cv::resize(qr, resized, cv::Size(160, 160), 0, 0, cv::INTER_NEAREST);
+    if (resized.channels() == 1)
+        cv::cvtColor(resized, resized, cv::COLOR_GRAY2BGR);
+    resized.copyTo(mat(cv::Rect(40, 40, 160, 160)));
+
+    BarcodeQrAlgorithm::Options noneOpt;
+    noneOpt.symbology = QStringLiteral("qr");
+    noneOpt.enhanceMode = QStringLiteral("none");
+    noneOpt.maxTimeMs = 2000;
+    BarcodeQrAlgorithm::Options autoOpt = noneOpt;
+    autoOpt.enhanceMode = QStringLiteral("auto");
+    BarcodeQrAlgorithm::Options fullOpt = noneOpt;
+    fullOpt.enhanceMode = QStringLiteral("full");
+
+    RecognitionResult rNone;
+    RecognitionResult rAuto;
+    RecognitionResult rFull;
+    QElapsedTimer t;
+    t.start();
+    QVERIFY(BarcodeQrAlgorithm::apply(VisionImage(mat), noneOpt, rNone));
+    const qint64 noneMs = t.elapsed();
+    t.restart();
+    QVERIFY(BarcodeQrAlgorithm::apply(VisionImage(mat), autoOpt, rAuto));
+    const qint64 autoMs = t.elapsed();
+    t.restart();
+    QVERIFY(BarcodeQrAlgorithm::apply(VisionImage(mat), fullOpt, rFull));
+    const qint64 fullMs = t.elapsed();
+
+    qDebug("benchmark recognition Debug ms: none=%lld(found=%d) auto=%lld(found=%d) full=%lld(found=%d)",
+           static_cast<long long>(noneMs), int(rNone.found),
+           static_cast<long long>(autoMs), int(rAuto.found),
+           static_cast<long long>(fullMs), int(rFull.found));
+    QVERIFY(rNone.found || rAuto.found || rFull.found);
+#else
+    QSKIP("OpenCV QR headers not compiled in");
+#endif
 }
 
 QTEST_MAIN(TestAlgorithmBenchmark)

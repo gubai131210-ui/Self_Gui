@@ -170,12 +170,19 @@ set(SELT_UI_SOURCES
     ui/nodeinspectordialog.h
     ui/propertypanel.cpp
     ui/propertypanel.h
+    ui/widgets/collapsiblesection.cpp
+    ui/widgets/collapsiblesection.h
+    ui/widgets/inspectorheader.cpp
+    ui/widgets/inspectorheader.h
+    ui/widgets/compactparamrow.cpp
+    ui/widgets/compactparamrow.h
     ui/flowbarwidget.cpp
     ui/flowbarwidget.h
     ui/theme/iconprovider.cpp
     ui/theme/iconprovider.h
     ui/theme/themecontroller.cpp
     ui/theme/themecontroller.h
+    ui/theme/uistyle.cpp
     ui/theme/uistyle.h
     ui/mainwindow.cpp
     ui/mainwindow.h
@@ -332,6 +339,7 @@ qt_add_executable(Selt_Gui_ui_tests
     tests/test_ui_foundation.cpp
     ui/theme/iconprovider.cpp
     ui/theme/themecontroller.cpp
+    ui/theme/uistyle.cpp
     ui/nodecatalogmodel.cpp
     ui/flowbarwidget.cpp
 )

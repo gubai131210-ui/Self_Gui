@@ -30,6 +30,11 @@ NodeInspectorDialog::NodeInspectorDialog(Document *document,
     layout->addWidget(m_propertyPanel, 1);
     m_runtimeSummaryLabel = new QLabel(QStringLiteral("最近运行：-"), this);
     m_runtimeSummaryLabel->setWordWrap(true);
+    m_runtimeSummaryLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_runtimeSummaryLabel->setMaximumHeight(180);
+    m_runtimeSummaryLabel->setStyleSheet(
+        QStringLiteral("QLabel { background: palette(base); color: palette(text);"
+                       " border: 1px solid palette(mid); padding: 6px; }"));
     layout->addWidget(m_runtimeSummaryLabel);
 
     auto *buttons = new QDialogButtonBox(this);

@@ -70,10 +70,13 @@ void CanvasScene::rebuildFromDocument()
 
 void CanvasScene::createNodeAt(const QString &type, const QPointF &scenePos)
 {
-    if (!m_document || !m_undoStack)
+    if (type.isEmpty() || !m_document || !m_undoStack)
         return;
     NodeModel node = NodeBuilder::create(type, snapPoint(scenePos));
+    if (node.type.isEmpty())
+        return;
     m_undoStack->push(new AddNodeCommand(m_document, node));
+    emit nodeTypeCreated(type);
 }
 
 void CanvasScene::deleteSelection()
@@ -909,8 +912,10 @@ void CanvasScene::onNodeAdded(const NodeModel &node)
         return;
     auto *item = new NodeGraphicsItem(node);
     addItem(item);
-    connect(item, &NodeGraphicsItem::doubleClicked,
-            this, &CanvasScene::nodeDoubleClicked);
+    // 用 lambda 转发，避免 signal→signal 在对象生命周期边界上走 assertObjectType。
+    connect(item, &NodeGraphicsItem::doubleClicked, this, [this](const QString &nodeId) {
+        emit nodeDoubleClicked(nodeId);
+    });
     connect(item, &NodeGraphicsItem::collapseToggled, this, [this](const QString &nodeId, bool collapsed) {
         if (!m_document || !m_document->hasNode(nodeId))
             return;

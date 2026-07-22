@@ -98,6 +98,10 @@ public:
     bool isValidFor(DataTypeId expected) const;
     bool convertTo(DataTypeId target, DataValue *out, QString *error = nullptr) const;
     QString debugString() const;
+    /// 结果面板用的可读摘要（不含 Type(...) 包装），复杂类型给短摘要。
+    QString displaySummary() const;
+    /// 详情对话框 / 复制整值用的完整文本。
+    QString displayDetail() const;
 
     QJsonObject toJson() const;
     static DataValue fromJson(const QJsonObject &obj, QString *error = nullptr);

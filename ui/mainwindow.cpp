@@ -605,9 +605,9 @@ void MainWindow::setupDocks()
     m_rightDock->setFeatures(QDockWidget::DockWidgetMovable
                              | QDockWidget::DockWidgetFloatable
                              | QDockWidget::DockWidgetClosable);
-    m_rightDock->setMinimumWidth(Selt::UiStyle::leftDockMinWidth);
     m_rightDock->setWidget(m_inspectorTabs);
     addDockWidget(Qt::RightDockWidgetArea, m_rightDock);
+    m_rightDock->setMinimumWidth(Selt::UiStyle::inspectorDockMinWidth);
     resizeDocks({m_rightDock}, {Selt::UiStyle::inspectorDockDefaultWidth}, Qt::Horizontal);
     m_rightDock->hide();
 
@@ -880,9 +880,17 @@ void MainWindow::setupConnections()
     connect(m_scene, &CanvasScene::statusMessage, this, [this](const QString &msg) {
         statusBar()->showMessage(msg, 3000);
     });
+    connect(m_scene, &CanvasScene::nodeTypeCreated, this, [this](const QString &type) {
+        Selt::OperatorPreferences::pushRecent(type);
+        // 仅写 QSettings；工具箱「最近使用」页由 NodePalette::refreshPreferencesSections
+        // 自行延后 + deleteLater 重建，避免与双击源控件生命周期冲突。
+        if (m_palette)
+            m_palette->refreshPreferencesSections();
+    });
     connect(m_scene, &CanvasScene::connectionDataTypeFilterRequested, m_palette,
             &NodePalette::setDataTypeFilter);
-    connect(m_palette, &NodePalette::nodeTypeActivated, this, &MainWindow::onPaletteActivated);
+    connect(m_palette, &NodePalette::nodeTypeActivated, this, &MainWindow::onPaletteActivated,
+            Qt::QueuedConnection);
     connect(m_palette, &NodePalette::nodeTypeSelected, this, [this](const QString &type) {
         if (!m_helpLabel || type.isEmpty())
             return;
@@ -919,6 +927,11 @@ void MainWindow::setupConnections()
             this, &MainWindow::onTeachTemplateRequested);
     connect(m_runController, &Selt::RunController::runFinished,
             this, &MainWindow::onRunFinished);
+    connect(m_propertyPanel, &PropertyPanel::runNodeRequested, this,
+            [this](const QString &nodeId) {
+                if (m_runController)
+                    m_runController->runSingleNode(nodeId);
+            });
     connect(m_runController, &Selt::RunController::runProgress,
             this, &MainWindow::onRunProgress);
     connect(m_runController, &Selt::RunController::busyChanged,
@@ -1553,11 +1566,10 @@ void MainWindow::onSelectionNodeChanged(const QString &nodeId)
 
 void MainWindow::onPaletteActivated(const QString &type)
 {
-    Selt::OperatorPreferences::pushRecent(type);
     const QPointF center = m_view->mapToScene(m_view->viewport()->rect().center());
     m_scene->createNodeAt(type, center);
-    if (m_palette)
-        m_palette->reloadCatalog();
+    // pushRecent / 工具箱刷新由 CanvasScene::nodeTypeCreated 统一延后处理，
+    // 避免在工具箱 doubleClicked 信号栈内同步 delete 发信控件。
 }
 
 void MainWindow::toggleSnap(bool enabled)
@@ -1813,6 +1825,8 @@ void MainWindow::refreshResultPreview(const QString &nodeId)
     VisionImage image;
     OverlayList overlays;
     QString title = QStringLiteral("结果图");
+    QString diagnosis = QStringLiteral("诊断：-");
+    QImage debugImage;
 
     if (nodeId.isEmpty()) {
         if (!m_lastVisionContext.resultImage.isEmpty())
@@ -1834,23 +1848,72 @@ void MainWindow::refreshResultPreview(const QString &nodeId)
                 }
             }
         }
+        if (m_lastVisionContext.hasError())
+            diagnosis = QStringLiteral("诊断：流程失败 — %1").arg(m_lastVisionContext.errorMessage);
+        else
+            diagnosis = QStringLiteral("诊断：最终结果");
     } else {
         const ModuleRunResult result = m_lastVisionContext.moduleResult(nodeId);
         image = result.outputImage;
         overlays = result.overlays;
         title = result.displayName.isEmpty() ? QStringLiteral("模块输出") : result.displayName;
+        QStringList parts;
+        if (!result.diagnosticCode.isEmpty())
+            parts << QStringLiteral("码=%1").arg(result.diagnosticCode);
+        auto portSummary = [&](const QString &portId) -> QString {
+            for (const PortValueRecord &rec : result.outputPortRecords) {
+                if (rec.portId == portId)
+                    return rec.valueSummary;
+            }
+            const QString raw = result.outputSummary.value(portId);
+            const int lp = raw.indexOf(QLatin1Char('('));
+            const int rp = raw.lastIndexOf(QLatin1Char(')'));
+            if (lp > 0 && rp > lp)
+                return raw.mid(lp + 1, rp - lp - 1);
+            return raw;
+        };
+        const QString stage = portSummary(QStringLiteral("failureStage"));
+        const QString strategy = portSummary(QStringLiteral("strategy"));
+        if (!stage.isEmpty())
+            parts << QStringLiteral("阶段=%1").arg(stage);
+        if (!strategy.isEmpty())
+            parts << QStringLiteral("策略=%1").arg(strategy);
+        if (!result.errorMessage.isEmpty())
+            parts << result.errorMessage;
+        diagnosis = parts.isEmpty()
+            ? QStringLiteral("诊断：成功")
+            : QStringLiteral("诊断：%1").arg(parts.join(QStringLiteral(" | ")));
+        if (!result.debugImage.isEmpty())
+            debugImage = result.debugImage.toQImage();
     }
 
     if (!image.isEmpty())
         m_resultPreview->setImage(image.toQImage(), title);
     m_resultPreview->setOverlays(overlays);
+    m_resultPreview->setDiagnosisText(diagnosis);
+    m_resultPreview->setDebugImage(debugImage, QStringLiteral("预处理/调试"));
 
+    QImage originalLayer;
+    if (!m_lastVisionContext.originalImage.isEmpty())
+        originalLayer = m_lastVisionContext.originalImage.toQImage();
+    QImage roiLayer;
+    RoiRect previewRoi;
     const QString selectedId = m_propertyPanel->property("currentNodeId").toString();
     if (m_document && m_document->hasNode(selectedId)) {
         const NodeModel node = m_document->node(selectedId);
-        m_resultPreview->setRoi(RoiRect::fromJson(node.parameters.value(QStringLiteral("roi")).toObject()));
+        previewRoi = RoiRect::fromJson(node.parameters.value(QStringLiteral("roi")).toObject());
+        m_resultPreview->setRoi(previewRoi);
         m_resultPreview->setRoiEditEnabled(node.parameters.contains(QStringLiteral("roi")));
     }
+    if (previewRoi.enabled && previewRoi.rect.isValid() && !originalLayer.isNull()) {
+        const QRect box = previewRoi.rect.toRect().intersected(originalLayer.rect());
+        if (box.isValid())
+            roiLayer = originalLayer.copy(box);
+    } else if (!image.isEmpty() && !nodeId.isEmpty()) {
+        // 若节点输出即 ROI 裁剪结果，用结果图作为 ROI 层参考。
+        roiLayer = image.toQImage();
+    }
+    m_resultPreview->setPreviewLayers(originalLayer, roiLayer, debugImage);
 }
 
 void MainWindow::updateNodeRunStatuses(const VisionContext &context)
@@ -1969,8 +2032,9 @@ void MainWindow::syncSelectedModuleStatus(const QString &nodeId)
         if (!result.outputSummary.isEmpty()) {
             QStringList outputs;
             for (auto it = result.outputSummary.cbegin(); it != result.outputSummary.cend(); ++it)
-                outputs.append(QStringLiteral("%1=%2").arg(it.key(), it.value()));
-            parts.append(QStringLiteral("输出: %1").arg(outputs.join(QStringLiteral(", "))));
+                outputs.append(QStringLiteral("  %1 = %2").arg(it.key(), it.value()));
+            parts.append(QStringLiteral("输出端口:\n%1").arg(
+                outputs.join(QLatin1Char('\n'))));
         }
         parts.append(QStringLiteral("快照: %1")
                          .arg(m_lastVisionContext.snapshotCreatedAt.isValid()
@@ -2168,6 +2232,20 @@ void MainWindow::onRunFinished(bool ok, const VisionContext &context)
     applyVisionContext(context, !ok);
     showResultsDock(true);
     updateRunActionsEnabled();
+
+    if (m_propertyPanel) {
+        const QString selectedId = m_propertyPanel->property("currentNodeId").toString();
+        const QString thumbId = selectedId.isEmpty()
+            ? (context.executionOrder.isEmpty() ? QString() : context.executionOrder.last())
+            : selectedId;
+        if (!thumbId.isEmpty() && context.moduleResults.contains(thumbId)) {
+            const ModuleRunResult result = context.moduleResult(thumbId);
+            if (!result.outputImage.isEmpty())
+                m_propertyPanel->setResultThumbnail(result.outputImage.toQImage());
+        }
+        syncSelectedModuleStatus(selectedId);
+    }
+
     if (!ok) {
         updateRunStatus(QStringLiteral("失败"), 3);
         if (!context.failedNodeId.isEmpty() && m_scene) {
