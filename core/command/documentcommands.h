@@ -117,6 +117,23 @@ private:
     NodeModel m_newNode;
 };
 
+/// Dedicated undo command for canvas port exposure toggles.
+class ChangeNodePortExposureCommand : public QUndoCommand
+{
+public:
+    ChangeNodePortExposureCommand(Document *document,
+                                  const NodeModel &oldNode,
+                                  const NodeModel &newNode,
+                                  QUndoCommand *parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    Document *m_document;
+    NodeModel m_oldNode;
+    NodeModel m_newNode;
+};
+
 class PasteNodesCommand : public QUndoCommand
 {
 public:

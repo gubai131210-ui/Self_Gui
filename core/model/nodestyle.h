@@ -7,12 +7,12 @@
 
 struct NodeStyle
 {
-    QColor fillColor{QColor(230, 240, 255)};
-    QColor borderColor{QColor(60, 100, 180)};
-    qreal borderWidth{2.0};
-    QColor textColor{QColor(20, 20, 20)};
-    int fontSize{12};
-    qreal cornerRadius{8.0};
+    QColor fillColor{QColor(45, 48, 54)};
+    QColor borderColor{QColor(255, 140, 0)};
+    qreal borderWidth{1.5};
+    QColor textColor{QColor(220, 224, 230)};
+    int fontSize{11};
+    qreal cornerRadius{6.0};
 
     QJsonObject toJson() const;
     static NodeStyle fromJson(const QJsonObject &obj);

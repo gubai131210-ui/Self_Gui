@@ -19,6 +19,7 @@ public:
     ConnectionModel model() const { return m_model; }
     void setModel(const ConnectionModel &model);
     void updatePath();
+    void setRelatedHighlight(bool related);
 
     QPainterPath shape() const override;
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
@@ -28,6 +29,7 @@ private:
     QPainterPath buildPath(const QPointF &start, const QPointF &end) const;
 
     ConnectionModel m_model;
+    bool m_relatedHighlight{false};
 };
 
 #endif // CONNECTIONGRAPHICSITEM_H

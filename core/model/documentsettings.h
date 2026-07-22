@@ -9,7 +9,7 @@ struct DocumentSettings
     int gridSize{20};
     bool snapToGrid{true};
     bool showGrid{true};
-    QColor backgroundColor{QColor(245, 245, 248)};
+    QColor backgroundColor{QColor(32, 34, 38)};
 
     QJsonObject toJson() const;
     static DocumentSettings fromJson(const QJsonObject &obj);

@@ -4,16 +4,20 @@
 #include "core/command/documentcommands.h"
 #include "core/model/document.h"
 #if SELT_HAS_OPENCV
+#include "vision/data/datatype.h"
 #include "vision/registry/visionnoderegistry.h"
+#include "vision/validation/graphvalidator.h"
 #endif
 #include "graphics/items/connectiongraphicsitem.h"
 #include "graphics/items/nodegraphicsitem.h"
 #include "graphics/items/portgraphicsitem.h"
+#include "ui/theme/uistyle.h"
 
 #include <QGraphicsPathItem>
 #include <QGraphicsSceneContextMenuEvent>
 #include <QGraphicsSceneMouseEvent>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMenu>
 #include <QPainter>
 #include <QSet>
@@ -30,6 +34,11 @@ CanvasScene::CanvasScene(Document *document, QUndoStack *undoStack, QObject *par
     connectDocument();
     connect(this, &QGraphicsScene::selectionChanged, this, &CanvasScene::onSelectionChanged);
     rebuildFromDocument();
+}
+
+void CanvasScene::setUndoStack(QUndoStack *undoStack)
+{
+    m_undoStack = undoStack;
 }
 
 NodeGraphicsItem *CanvasScene::nodeItem(const QString &id) const
@@ -117,16 +126,59 @@ void CanvasScene::beginConnection(PortGraphicsItem *port)
     m_sourcePort = port;
     m_tempConnection = addPath(QPainterPath(), QPen(QColor(100, 140, 220), 2, Qt::DashLine));
     m_tempConnection->setZValue(100);
+    refreshConnectionHighlights(port ? port->scenePos() : QPointF());
+#if SELT_HAS_OPENCV
+    if (port) {
+        QString typeHint = port->port().dataType;
+        bool ok = false;
+        const Selt::DataTypeId tid = Selt::dataTypeIdFromString(typeHint, &ok);
+        if (ok)
+            typeHint = Selt::dataTypeIdDisplayName(tid);
+        if (!typeHint.isEmpty()) {
+            emit statusMessage(
+                QStringLiteral("连线中 · 端口类型 %1 — 工具箱已按该类型筛选")
+                    .arg(typeHint));
+        }
+        emit connectionDataTypeFilterRequested(port->port().dataType);
+    }
+#endif
 }
 
 void CanvasScene::updateTempConnection(const QPointF &scenePos)
 {
     if (!m_sourcePort || !m_tempConnection)
         return;
+    QPointF end = scenePos;
+    if (PortGraphicsItem *nearPort = findCompatiblePortNear(scenePos, 28.0))
+        end = nearPort->scenePos();
     QPainterPath path;
     path.moveTo(m_sourcePort->scenePos());
-    path.lineTo(scenePos);
+    path.lineTo(end);
     m_tempConnection->setPath(path);
+
+    bool validNear = false;
+#if SELT_HAS_OPENCV
+    if (PortGraphicsItem *nearPort = findCompatiblePortNear(scenePos, 28.0)) {
+        QString err;
+        NodeGraphicsItem *srcNode = m_sourcePort->ownerNode();
+        NodeGraphicsItem *dstNode = nearPort->ownerNode();
+        if (srcNode && dstNode) {
+            validNear = Selt::GraphValidator::canConnect(
+                *m_document, srcNode->nodeId(), m_sourcePort->portId(),
+                dstNode->nodeId(), nearPort->portId(), &err, true);
+            if (validNear) {
+                emit statusMessage(QStringLiteral("可连接：%1.%2 → %3.%4")
+                                       .arg(srcNode->model().text, m_sourcePort->portId(),
+                                            dstNode->model().text, nearPort->portId()));
+            } else if (!err.isEmpty()) {
+                emit statusMessage(err);
+            }
+        }
+    }
+#endif
+    m_tempConnection->setPen(QPen(validNear ? QColor(46, 204, 113) : QColor(100, 140, 220),
+                                  2, Qt::DashLine));
+    refreshConnectionHighlights(scenePos);
 }
 
 void CanvasScene::finishConnection(PortGraphicsItem *targetPort)
@@ -143,6 +195,18 @@ void CanvasScene::finishConnection(PortGraphicsItem *targetPort)
         return;
     }
 
+    const PortModel sourcePort = m_sourcePort->port();
+    const PortModel targetPortModel = targetPort->port();
+    const bool sourceIsOutput = sourcePort.direction == PortDirection::Output
+        || sourcePort.direction == PortDirection::Both;
+    const bool targetIsInput = targetPortModel.direction == PortDirection::Input
+        || targetPortModel.direction == PortDirection::Both;
+    if (!sourceIsOutput || !targetIsInput) {
+        emit statusMessage(QStringLiteral("连线方向无效：需要 输出端口 → 输入端口"));
+        cancelConnection();
+        return;
+    }
+
     ConnectionModel connection;
     connection.id = Document::createId(QStringLiteral("conn"));
     connection.sourceNodeId = sourceNode->nodeId();
@@ -152,18 +216,41 @@ void CanvasScene::finishConnection(PortGraphicsItem *targetPort)
     connection.lineStyle = ConnectionLineStyle::Orthogonal;
     connection.showArrow = true;
 
+    const QString occupiedId = occupiedConnectionId(connection.targetNodeId, connection.targetPortId);
     cancelConnection();
-    m_undoStack->push(new AddConnectionCommand(m_document, connection));
+
+#if SELT_HAS_OPENCV
+    QString connectError;
+    if (!Selt::GraphValidator::canConnect(*m_document,
+                                          connection.sourceNodeId, connection.sourcePortId,
+                                          connection.targetNodeId, connection.targetPortId,
+                                          &connectError, true)) {
+        emit statusMessage(connectError);
+        return;
+    }
+#endif
+
+    if (!occupiedId.isEmpty()) {
+        auto *macro = new QUndoCommand(QStringLiteral("替换连线"));
+        new DeleteConnectionsCommand(m_document, {occupiedId}, macro);
+        new AddConnectionCommand(m_document, connection, macro);
+        m_undoStack->push(macro);
+        emit statusMessage(QStringLiteral("已替换原有输入连线"));
+    } else {
+        m_undoStack->push(new AddConnectionCommand(m_document, connection));
+    }
 }
 
 void CanvasScene::cancelConnection()
 {
+    clearConnectionHighlights();
     if (m_tempConnection) {
         removeItem(m_tempConnection);
         delete m_tempConnection;
         m_tempConnection = nullptr;
     }
     m_sourcePort = nullptr;
+    emit connectionDataTypeFilterRequested(QString());
 }
 
 void CanvasScene::notifyNodeMoved(const QString &nodeId, const QPointF &oldPos, const QPointF &newPos)
@@ -442,6 +529,241 @@ void CanvasScene::ungroupSelection()
         delete macro;
 }
 
+void CanvasScene::autoLayoutSelection()
+{
+    if (!m_document || !m_undoStack)
+        return;
+    QStringList ids = selectedNodeIds();
+    if (ids.size() < 2)
+        ids = [&]() {
+            QStringList all;
+            for (const NodeModel &n : m_document->nodes())
+                all.append(n.id);
+            return all;
+        }();
+    if (ids.size() < 2)
+        return;
+
+    QHash<QString, int> indegree;
+    QHash<QString, QStringList> outs;
+    QSet<QString> idSet(ids.begin(), ids.end());
+    for (const QString &id : ids)
+        indegree[id] = 0;
+    for (const ConnectionModel &c : m_document->connections()) {
+        if (!idSet.contains(c.sourceNodeId) || !idSet.contains(c.targetNodeId))
+            continue;
+        outs[c.sourceNodeId].append(c.targetNodeId);
+        indegree[c.targetNodeId] += 1;
+    }
+
+    QStringList queue;
+    for (const QString &id : ids) {
+        if (indegree.value(id) == 0)
+            queue.append(id);
+    }
+    QStringList order;
+    while (!queue.isEmpty()) {
+        const QString id = queue.takeFirst();
+        order.append(id);
+        for (const QString &next : outs.value(id)) {
+            indegree[next] -= 1;
+            if (indegree[next] == 0)
+                queue.append(next);
+        }
+    }
+    for (const QString &id : ids) {
+        if (!order.contains(id))
+            order.append(id);
+    }
+
+    constexpr qreal kDx = 220.0;
+    constexpr qreal kDy = 120.0;
+
+    // Layered DAG layout: Kahn level assignment, left-to-right columns.
+    QHash<QString, int> level;
+    QHash<QString, int> remaining = indegree;
+    QStringList frontier;
+    for (const QString &id : ids) {
+        if (indegree.value(id) == 0) {
+            frontier.append(id);
+            level[id] = 0;
+        }
+    }
+    while (!frontier.isEmpty()) {
+        const QString id = frontier.takeFirst();
+        const int nextLevel = level.value(id) + 1;
+        for (const QString &next : outs.value(id)) {
+            level[next] = qMax(level.value(next, 0), nextLevel);
+            remaining[next] -= 1;
+            if (remaining[next] == 0)
+                frontier.append(next);
+        }
+    }
+    for (const QString &id : ids) {
+        if (!level.contains(id))
+            level[id] = 0;
+    }
+
+    QHash<int, QStringList> byLevel;
+    int maxLevel = 0;
+    for (const QString &id : order) {
+        const int lv = level.value(id, 0);
+        byLevel[lv].append(id);
+        maxLevel = qMax(maxLevel, lv);
+    }
+
+    QVector<MoveNodesCommand::Item> moves;
+    for (int lv = 0; lv <= maxLevel; ++lv) {
+        const QStringList &col = byLevel.value(lv);
+        const qreal startY = -0.5 * (col.size() - 1) * kDy;
+        for (int i = 0; i < col.size(); ++i) {
+            const QString &id = col.at(i);
+            if (!m_document->hasNode(id))
+                continue;
+            MoveNodesCommand::Item item;
+            item.id = id;
+            item.oldPos = m_document->node(id).position;
+            item.newPos = QPointF(lv * kDx, startY + i * kDy);
+            if (item.oldPos != item.newPos)
+                moves.append(item);
+        }
+    }
+    if (!moves.isEmpty()) {
+        m_undoStack->push(new MoveNodesCommand(m_document, moves));
+        emit statusMessage(QStringLiteral("已按流程层级自动布局 %1 个节点").arg(moves.size()));
+    }
+}
+
+void CanvasScene::toggleBreakpointOnSelection()
+{
+    const QStringList ids = selectedNodeIds();
+    if (ids.isEmpty() || !m_document || !m_undoStack)
+        return;
+    auto *macro = new QUndoCommand(QStringLiteral("切换断点"));
+    for (const QString &id : ids) {
+        NodeModel oldNode = m_document->node(id);
+        NodeModel newNode = oldNode;
+        newNode.breakpoint = !oldNode.breakpoint;
+        new ChangeNodePropertyCommand(m_document, oldNode, newNode, macro);
+    }
+    m_undoStack->push(macro);
+}
+
+void CanvasScene::setValidationWarning(const QString &nodeId, bool warning)
+{
+    m_validationWarnings.insert(nodeId, warning);
+    if (NodeGraphicsItem *item = nodeItem(nodeId)) {
+        if (warning && item->runStatus() == NodeRunVisualStatus::Idle)
+            item->setRunStatus(NodeRunVisualStatus::Warning);
+        else if (!warning && item->runStatus() == NodeRunVisualStatus::Warning)
+            item->setRunStatus(NodeRunVisualStatus::Idle);
+    }
+}
+
+PortGraphicsItem *CanvasScene::findCompatiblePortNear(const QPointF &scenePos, qreal radius) const
+{
+    if (!m_sourcePort || !m_document)
+        return nullptr;
+    NodeGraphicsItem *sourceNode = m_sourcePort->ownerNode();
+    if (!sourceNode)
+        return nullptr;
+
+    PortGraphicsItem *best = nullptr;
+    qreal bestDist = radius;
+    for (auto it = m_nodes.constBegin(); it != m_nodes.constEnd(); ++it) {
+        NodeGraphicsItem *node = it.value();
+        if (!node || node == sourceNode)
+            continue;
+        for (const PortModel &port : node->model().ports) {
+            PortGraphicsItem *portItem = node->portItem(port.id);
+            if (!portItem)
+                continue;
+            const bool targetIsInput = port.direction == PortDirection::Input
+                || port.direction == PortDirection::Both;
+            if (!targetIsInput)
+                continue;
+            const qreal dist = QLineF(scenePos, portItem->scenePos()).length();
+            if (dist > bestDist)
+                continue;
+#if SELT_HAS_OPENCV
+            QString err;
+            if (!Selt::GraphValidator::canConnect(*m_document,
+                                                  sourceNode->nodeId(), m_sourcePort->portId(),
+                                                  node->nodeId(), port.id, &err, true)) {
+                continue;
+            }
+#endif
+            bestDist = dist;
+            best = portItem;
+        }
+    }
+    return best;
+}
+
+void CanvasScene::refreshConnectionHighlights(const QPointF &scenePos)
+{
+    Q_UNUSED(scenePos);
+    if (!m_sourcePort || !m_document) {
+        clearConnectionHighlights();
+        return;
+    }
+    NodeGraphicsItem *sourceNode = m_sourcePort->ownerNode();
+    for (auto it = m_nodes.constBegin(); it != m_nodes.constEnd(); ++it) {
+        NodeGraphicsItem *node = it.value();
+        if (!node)
+            continue;
+        for (const PortModel &port : node->model().ports) {
+            PortGraphicsItem *portItem = node->portItem(port.id);
+            if (!portItem)
+                continue;
+            if (node == sourceNode) {
+                portItem->clearCompatibilityHighlight();
+                continue;
+            }
+            const bool targetIsInput = port.direction == PortDirection::Input
+                || port.direction == PortDirection::Both;
+            if (!targetIsInput) {
+                portItem->setCompatibilityHighlight(false, true);
+                continue;
+            }
+            bool ok = true;
+#if SELT_HAS_OPENCV
+            QString err;
+            ok = Selt::GraphValidator::canConnect(*m_document,
+                                                  sourceNode->nodeId(), m_sourcePort->portId(),
+                                                  node->nodeId(), port.id, &err, true);
+#else
+            Q_UNUSED(sourceNode);
+#endif
+            portItem->setCompatibilityHighlight(ok, !ok);
+        }
+    }
+}
+
+void CanvasScene::clearConnectionHighlights()
+{
+    for (auto it = m_nodes.constBegin(); it != m_nodes.constEnd(); ++it) {
+        NodeGraphicsItem *node = it.value();
+        if (!node)
+            continue;
+        for (const PortModel &port : node->model().ports) {
+            if (PortGraphicsItem *portItem = node->portItem(port.id))
+                portItem->clearCompatibilityHighlight();
+        }
+    }
+}
+
+QString CanvasScene::occupiedConnectionId(const QString &targetNodeId, const QString &targetPortId) const
+{
+    if (!m_document)
+        return {};
+    for (const ConnectionModel &c : m_document->connections()) {
+        if (c.targetNodeId == targetNodeId && c.targetPortId == targetPortId)
+            return c.id;
+    }
+    return {};
+}
+
 void CanvasScene::drawBackground(QPainter *painter, const QRectF &rect)
 {
     if (!m_document) {
@@ -454,16 +776,26 @@ void CanvasScene::drawBackground(QPainter *painter, const QRectF &rect)
         return;
 
     const int grid = qMax(1, m_document->settings().gridSize);
-    QPen minorPen(QColor(220, 220, 230));
+    const int majorEvery = 5;
+    const QColor bg = m_document->settings().backgroundColor;
+    const bool dark = bg.lightness() < 128;
+    QPen minorPen(dark ? Selt::UiStyle::gridLine() : QColor(220, 220, 230));
     minorPen.setWidthF(0);
-    painter->setPen(minorPen);
+    QPen majorPen(dark ? Selt::UiStyle::gridMajorLine() : QColor(255, 140, 0, 40));
+    majorPen.setWidthF(0);
 
     const int left = static_cast<int>(std::floor(rect.left() / grid)) * grid;
     const int top = static_cast<int>(std::floor(rect.top() / grid)) * grid;
-    for (int x = left; x < rect.right(); x += grid)
+    for (int x = left; x < rect.right(); x += grid) {
+        const bool major = (x % (grid * majorEvery)) == 0;
+        painter->setPen(major ? majorPen : minorPen);
         painter->drawLine(x, static_cast<int>(rect.top()), x, static_cast<int>(rect.bottom()));
-    for (int y = top; y < rect.bottom(); y += grid)
+    }
+    for (int y = top; y < rect.bottom(); y += grid) {
+        const bool major = (y % (grid * majorEvery)) == 0;
+        painter->setPen(major ? majorPen : minorPen);
         painter->drawLine(static_cast<int>(rect.left()), y, static_cast<int>(rect.right()), y);
+    }
 }
 
 void CanvasScene::keyPressEvent(QKeyEvent *event)
@@ -507,11 +839,13 @@ void CanvasScene::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 void CanvasScene::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 {
     if (isConnecting() && event->button() == Qt::LeftButton) {
-        PortGraphicsItem *target = nullptr;
-        for (QGraphicsItem *item : items(event->scenePos())) {
-            target = qgraphicsitem_cast<PortGraphicsItem *>(item);
-            if (target)
-                break;
+        PortGraphicsItem *target = findCompatiblePortNear(event->scenePos(), 28.0);
+        if (!target) {
+            for (QGraphicsItem *item : items(event->scenePos())) {
+                target = qgraphicsitem_cast<PortGraphicsItem *>(item);
+                if (target)
+                    break;
+            }
         }
         if (target)
             finishConnection(target);
@@ -526,6 +860,29 @@ void CanvasScene::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 void CanvasScene::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
 {
     QMenu menu;
+    NodeGraphicsItem *contextNode = nullptr;
+    for (QGraphicsItem *item : items(event->scenePos())) {
+        contextNode = qgraphicsitem_cast<NodeGraphicsItem *>(item);
+        if (contextNode)
+            break;
+    }
+    if (contextNode) {
+        const QString nodeId = contextNode->nodeId();
+        QMenu *runMenu = menu.addMenu(QStringLiteral("调试运行"));
+        runMenu->addAction(QStringLiteral("运行此节点"), this,
+                           [this, nodeId]() { emit runNodeRequested(nodeId); });
+        runMenu->addAction(QStringLiteral("从此节点运行"), this,
+                           [this, nodeId]() { emit runFromNodeRequested(nodeId); });
+        menu.addAction(QStringLiteral("查看上游依赖"), this,
+                       [this, nodeId]() { emit inspectUpstreamRequested(nodeId); });
+        menu.addAction(QStringLiteral("切换断点"), this, [this, nodeId]() {
+            clearSelection();
+            if (NodeGraphicsItem *item = nodeItem(nodeId))
+                item->setSelected(true);
+            toggleBreakpointOnSelection();
+        });
+        menu.addSeparator();
+    }
     QMenu *createMenu = menu.addMenu(QStringLiteral("创建视觉模块"));
 #if SELT_HAS_OPENCV
     for (const QString &category : VisionNodeRegistry::categories()) {
@@ -552,6 +909,17 @@ void CanvasScene::onNodeAdded(const NodeModel &node)
         return;
     auto *item = new NodeGraphicsItem(node);
     addItem(item);
+    connect(item, &NodeGraphicsItem::doubleClicked,
+            this, &CanvasScene::nodeDoubleClicked);
+    connect(item, &NodeGraphicsItem::collapseToggled, this, [this](const QString &nodeId, bool collapsed) {
+        if (!m_document || !m_document->hasNode(nodeId))
+            return;
+        NodeModel model = m_document->node(nodeId);
+        if (model.collapsed == collapsed)
+            return;
+        model.collapsed = collapsed;
+        m_document->updateNode(model);
+    });
     m_nodes.insert(node.id, item);
 }
 
@@ -580,13 +948,36 @@ void CanvasScene::onConnectionAdded(const ConnectionModel &connection)
     addItem(item);
     m_connections.insert(connection.id, item);
     item->updatePath();
+
+    // Refresh port capsules so connected state / forced exposure updates immediately.
+    if (auto *src = m_nodes.value(connection.sourceNodeId))
+        src->setModel(m_document ? m_document->node(connection.sourceNodeId) : src->model());
+    if (auto *dst = m_nodes.value(connection.targetNodeId))
+        dst->setModel(m_document ? m_document->node(connection.targetNodeId) : dst->model());
+    updateConnectionsForNode(connection.sourceNodeId);
+    updateConnectionsForNode(connection.targetNodeId);
 }
 
 void CanvasScene::onConnectionRemoved(const QString &id)
 {
-    if (auto *item = m_connections.take(id)) {
-        removeItem(item);
-        delete item;
+    QString sourceNodeId;
+    QString targetNodeId;
+    if (auto *existing = m_connections.value(id)) {
+        sourceNodeId = existing->model().sourceNodeId;
+        targetNodeId = existing->model().targetNodeId;
+        removeItem(existing);
+        delete existing;
+        m_connections.remove(id);
+    }
+    if (!sourceNodeId.isEmpty() && m_nodes.contains(sourceNodeId) && m_document
+        && m_document->hasNode(sourceNodeId)) {
+        m_nodes.value(sourceNodeId)->setModel(m_document->node(sourceNodeId));
+        updateConnectionsForNode(sourceNodeId);
+    }
+    if (!targetNodeId.isEmpty() && m_nodes.contains(targetNodeId) && m_document
+        && m_document->hasNode(targetNodeId)) {
+        m_nodes.value(targetNodeId)->setModel(m_document->node(targetNodeId));
+        updateConnectionsForNode(targetNodeId);
     }
 }
 
@@ -606,6 +997,27 @@ void CanvasScene::onDocumentReset()
 void CanvasScene::onSelectionChanged()
 {
     const QStringList ids = selectedNodeIds();
+    QSet<QString> related;
+    for (const QString &id : ids)
+        related.insert(id);
+    if (m_document) {
+        for (const ConnectionModel &c : m_document->connections()) {
+            if (related.contains(c.sourceNodeId) || related.contains(c.targetNodeId)) {
+                related.insert(c.sourceNodeId);
+                related.insert(c.targetNodeId);
+            }
+        }
+    }
+    for (auto it = m_connections.constBegin(); it != m_connections.constEnd(); ++it) {
+        ConnectionGraphicsItem *item = it.value();
+        if (!item)
+            continue;
+        const ConnectionModel model = item->model();
+        const bool highlight = !ids.isEmpty()
+            && (related.contains(model.sourceNodeId) && related.contains(model.targetNodeId))
+            && (ids.contains(model.sourceNodeId) || ids.contains(model.targetNodeId));
+        item->setRelatedHighlight(highlight);
+    }
     emit selectionNodeChanged(ids.size() == 1 ? ids.first() : QString());
 }
 

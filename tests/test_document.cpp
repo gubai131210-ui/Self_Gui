@@ -4,6 +4,7 @@
 #include "core/serialization/documentserializer.h"
 
 #include <QCoreApplication>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QUndoStack>
@@ -21,7 +22,28 @@ private slots:
     void jsonRejectsBadFormat();
     void undoRedoAddDelete();
     void undoMove();
+    void serializerVersionIsCurrent();
+    void nodeEnabledDefaultsTrueAndSerializes();
 };
+
+void TestDocument::nodeEnabledDefaultsTrueAndSerializes()
+{
+    NodeModel node = NodeFactory::create(QStringLiteral("rectangle"));
+    QVERIFY(node.enabled);
+    node.enabled = false;
+    const NodeModel restored = NodeModel::fromJson(node.toJson());
+    QVERIFY(!restored.enabled);
+    // Legacy JSON without enabled field stays enabled.
+    QJsonObject obj = node.toJson();
+    obj.remove(QStringLiteral("enabled"));
+    QCOMPARE(NodeModel::fromJson(obj).enabled, true);
+}
+
+void TestDocument::serializerVersionIsCurrent()
+{
+    QCOMPARE(DocumentSerializer::CurrentVersion, 3);
+    QCOMPARE(QString::fromLatin1(DocumentSerializer::FormatName), QStringLiteral("selt-document"));
+}
 
 void TestDocument::createAndAddNode()
 {

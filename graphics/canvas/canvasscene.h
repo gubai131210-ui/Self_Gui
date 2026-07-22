@@ -20,6 +20,7 @@ public:
 
     Document *document() const { return m_document; }
     QUndoStack *undoStack() const { return m_undoStack; }
+    void setUndoStack(QUndoStack *undoStack);
 
     NodeGraphicsItem *nodeItem(const QString &id) const;
     ConnectionGraphicsItem *connectionItem(const QString &id) const;
@@ -45,14 +46,23 @@ public:
     void pasteClipboard(const QPointF &anchor);
     void alignSelection(Qt::Alignment alignment);
     void distributeSelection(Qt::Orientation orientation);
+    void autoLayoutSelection();
     void bringSelectionForward(bool toFront);
     void sendSelectionBackward(bool toBack);
     void groupSelection();
     void ungroupSelection();
+    void toggleBreakpointOnSelection();
+    void setValidationWarning(const QString &nodeId, bool warning);
 
 signals:
     void selectionNodeChanged(const QString &nodeId);
+    void nodeDoubleClicked(const QString &nodeId);
+    void runNodeRequested(const QString &nodeId);
+    void runFromNodeRequested(const QString &nodeId);
+    void inspectUpstreamRequested(const QString &nodeId);
     void statusMessage(const QString &message);
+    /// Empty string clears toolbox type filter after connection drag ends.
+    void connectionDataTypeFilterRequested(const QString &dataTypeId);
 
 protected:
     void drawBackground(QPainter *painter, const QRectF &rect) override;
@@ -74,6 +84,10 @@ private slots:
 private:
     void connectDocument();
     QPointF snapPoint(const QPointF &pos) const;
+    PortGraphicsItem *findCompatiblePortNear(const QPointF &scenePos, qreal radius) const;
+    void refreshConnectionHighlights(const QPointF &scenePos);
+    void clearConnectionHighlights();
+    QString occupiedConnectionId(const QString &targetNodeId, const QString &targetPortId) const;
 
     Document *m_document{nullptr};
     QUndoStack *m_undoStack{nullptr};
@@ -83,6 +97,7 @@ private:
     QGraphicsPathItem *m_tempConnection{nullptr};
     QVector<NodeModel> m_clipboardNodes;
     QVector<ConnectionModel> m_clipboardConnections;
+    QHash<QString, bool> m_validationWarnings;
 };
 
 #endif // CANVASSCENE_H

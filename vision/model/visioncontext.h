@@ -5,9 +5,13 @@
 #include "modulestatus.h"
 #include "overlayitems.h"
 #include "visionimage.h"
+#include "vision/runtime/runtimediagnostic.h"
+#include "vision/validation/graphdiagnostic.h"
+#include <QDateTime>
 
 #include <QHash>
 #include <QStringList>
+#include <QVector>
 
 struct ModuleRunResult
 {
@@ -19,6 +23,12 @@ struct ModuleRunResult
     OverlayList overlays;
     MeasurementResult measurement;
     QString errorMessage;
+    /// parameter | binding | execution | cancelled | disabled | device | validation
+    QString failureKind;
+    /// Stable machine code (e.g. image_empty); independent of failureKind taxonomy.
+    QString diagnosticCode;
+    QHash<QString, QString> inputSummary;
+    QHash<QString, QString> outputSummary;
     qint64 elapsedMs{0};
 };
 
@@ -39,7 +49,27 @@ struct VisionContext
     qint64 elapsedMs{0};
     ExecutionMode mode{ExecutionMode::Once};
     QHash<QString, ModuleRunResult> moduleResults;
+    /// Ordered lightweight run records derived from moduleResults (same semantic channel).
+    QVector<ModuleRunResult> runRecords;
     QStringList executionOrder;
+    QVector<Selt::GraphDiagnostic> diagnostics;
+    QVector<Selt::RuntimeDiagnostic> runtimeDiagnostics;
+    QString executionScope;
+    QDateTime snapshotCreatedAt;
+    QStringList skippedNodeIds;
+    qint64 imageCopyCount{0};
+    qint64 cacheHitCount{0};
+
+    /// Industrial run trace metadata.
+    qint64 frameId{0};
+    QString deviceId;
+    QString sourceDescription;
+    QString calibrationId;
+    QString batchId;
+    QDateTime frameGrabbedAt;
+    QVector<MeasurementResult> recentMeasurements;
+    /// DebugCopy keeps images in ModuleRunResult; ProductionLite may clear snapshots later.
+    bool retainImageSnapshots{true};
 
     void appendLog(const QString &line);
     void setError(const QString &message, const QString &nodeId = QString());

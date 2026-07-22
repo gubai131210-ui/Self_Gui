@@ -14,7 +14,8 @@ enum class NodeRunVisualStatus {
     Running,
     Success,
     Failed,
-    Disabled
+    Disabled,
+    Warning
 };
 
 class NodeGraphicsItem : public QGraphicsObject
@@ -32,6 +33,8 @@ public:
     void setModel(const NodeModel &model);
     void setRunStatus(NodeRunVisualStatus status);
     NodeRunVisualStatus runStatus() const { return m_runStatus; }
+    void setRunSummary(const QString &summary, qint64 elapsedMs = -1);
+    void clearRunSummary();
     PortGraphicsItem *portItem(const QString &portId) const;
     QPointF portScenePos(const QString &portId) const;
 
@@ -41,15 +44,23 @@ public:
 
 signals:
     void moveFinished(const QString &nodeId, const QPointF &oldPos, const QPointF &newPos);
+    void doubleClicked(const QString &nodeId);
+    /// Emitted when the user toggles the fold chevron; caller should persist model.collapsed.
+    void collapseToggled(const QString &nodeId, bool collapsed);
 
 protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
     void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
     void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override;
+    void mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event) override;
+    void hoverEnterEvent(QGraphicsSceneHoverEvent *event) override;
+    void hoverMoveEvent(QGraphicsSceneHoverEvent *event) override;
 
 private:
     void rebuildPorts();
+    void refreshToolTip();
     QPainterPath shapePath() const;
+    QRectF foldButtonRect() const;
     CanvasScene *canvasScene() const;
 
     NodeModel m_model;
@@ -57,6 +68,8 @@ private:
     QPointF m_pressScenePos;
     bool m_moving{false};
     NodeRunVisualStatus m_runStatus{NodeRunVisualStatus::Idle};
+    QString m_runSummary;
+    qint64 m_elapsedMs{-1};
 };
 
 #endif // NODEGRAPHICSITEM_H

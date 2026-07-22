@@ -50,13 +50,11 @@ Qt MinGW  +  OpenCV MinGW (自编译) ✅ 可以
 
 ### 1.3 本项目需要的 OpenCV 模块
 
-视觉 Demo 最少需要：
+本项目需要的 OpenCV 模块：
 
-- `core`
-- `imgproc`
-- `imgcodecs`
-
-其他模块（dnn、gapi、video、python 绑定等）可关，以缩短编译时间。
+- `core` / `imgproc` / `imgcodecs`（基础视觉）
+- `features2d`（ORB 特征匹配；定位算子）
+- `videoio`（可选；相机抓帧）
 
 本项目通过 `cmake/FindOpenCVSetup.cmake` 查找 MinGW 版 OpenCV；成功后定义 `SELT_HAS_OPENCV`。
 

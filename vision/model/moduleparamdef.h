@@ -38,6 +38,8 @@ struct ModuleParamDef
     QVector<ModuleParamOption> enumOptions;
     QString fileFilter;
     QString tooltip;
+    /// Optional inspector group title (e.g. "采样", "阈值", "ROI").
+    QString group;
     int displayOrder{0};
 
     QJsonValue defaultJsonValue() const

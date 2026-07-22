@@ -173,6 +173,27 @@ void ChangeNodePropertyCommand::redo()
     m_document->updateNode(m_newNode);
 }
 
+ChangeNodePortExposureCommand::ChangeNodePortExposureCommand(Document *document,
+                                                             const NodeModel &oldNode,
+                                                             const NodeModel &newNode,
+                                                             QUndoCommand *parent)
+    : QUndoCommand(QStringLiteral("修改端口暴露"), parent)
+    , m_document(document)
+    , m_oldNode(oldNode)
+    , m_newNode(newNode)
+{
+}
+
+void ChangeNodePortExposureCommand::undo()
+{
+    m_document->updateNode(m_oldNode);
+}
+
+void ChangeNodePortExposureCommand::redo()
+{
+    m_document->updateNode(m_newNode);
+}
+
 PasteNodesCommand::PasteNodesCommand(Document *document,
                                      const QVector<NodeModel> &nodes,
                                      const QVector<ConnectionModel> &connections,

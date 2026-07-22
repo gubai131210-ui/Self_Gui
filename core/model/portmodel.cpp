@@ -28,6 +28,8 @@ QJsonObject PortModel::toJson() const
     obj.insert(QStringLiteral("id"), id);
     obj.insert(QStringLiteral("name"), name);
     obj.insert(QStringLiteral("direction"), directionToString(direction));
+    if (!dataType.isEmpty())
+        obj.insert(QStringLiteral("dataType"), dataType);
     obj.insert(QStringLiteral("relativeX"), relativeX);
     obj.insert(QStringLiteral("relativeY"), relativeY);
     return obj;
@@ -39,6 +41,7 @@ PortModel PortModel::fromJson(const QJsonObject &obj)
     port.id = obj.value(QStringLiteral("id")).toString();
     port.name = obj.value(QStringLiteral("name")).toString();
     port.direction = directionFromString(obj.value(QStringLiteral("direction")).toString());
+    port.dataType = obj.value(QStringLiteral("dataType")).toString();
     port.relativeX = obj.value(QStringLiteral("relativeX")).toDouble(0.5);
     port.relativeY = obj.value(QStringLiteral("relativeY")).toDouble(0.5);
     return port;

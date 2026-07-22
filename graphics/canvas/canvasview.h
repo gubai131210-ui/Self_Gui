@@ -17,6 +17,15 @@ public:
     void resetZoom();
     void fitAll();
     qreal zoomFactor() const;
+    void setZoomFactor(qreal factor);
+    void setMinimapVisible(bool visible);
+    bool isMinimapVisible() const { return m_minimapVisible; }
+
+    QPointF viewCenter() const;
+    void setViewCenter(const QPointF &center);
+    int horizontalScroll() const;
+    int verticalScroll() const;
+    void setScrollOffsets(int h, int v);
 
 signals:
     void zoomChanged(qreal factor);
@@ -42,6 +51,7 @@ private:
     bool m_spaceDown{false};
     QPoint m_lastPanPos;
     qreal m_zoom{1.0};
+    bool m_minimapVisible{true};
 };
 
 #endif // CANVASVIEW_H

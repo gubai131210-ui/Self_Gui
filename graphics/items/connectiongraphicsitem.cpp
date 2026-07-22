@@ -1,7 +1,11 @@
 #include "connectiongraphicsitem.h"
 
 #include "nodegraphicsitem.h"
+#include "portgraphicsitem.h"
 #include "graphics/canvas/canvasscene.h"
+#include "ui/theme/uistyle.h"
+#include "vision/data/datatype.h"
+#include "vision/model/modulevisualstyle.h"
 
 #include <QPainter>
 #include <QStyleOptionGraphicsItem>
@@ -17,13 +21,21 @@ ConnectionGraphicsItem::ConnectionGraphicsItem(const ConnectionModel &model, QGr
 {
     setFlag(QGraphicsItem::ItemIsSelectable, true);
     setZValue(-1);
-    setPen(QPen(QColor(70, 70, 90), 2.0));
+    setPen(QPen(Selt::UiStyle::connectionIdle(), 2.0));
 }
 
 void ConnectionGraphicsItem::setModel(const ConnectionModel &model)
 {
     m_model = model;
     updatePath();
+}
+
+void ConnectionGraphicsItem::setRelatedHighlight(bool related)
+{
+    if (m_relatedHighlight == related)
+        return;
+    m_relatedHighlight = related;
+    update();
 }
 
 void ConnectionGraphicsItem::updatePath()
@@ -55,9 +67,23 @@ void ConnectionGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphics
     Q_UNUSED(widget);
     painter->setRenderHint(QPainter::Antialiasing, true);
 
-    QPen pen(QColor(70, 70, 90), 2.0);
+    QColor lineColor = Selt::UiStyle::connectionIdle();
+    if (auto *scene = canvasScene()) {
+        if (NodeGraphicsItem *source = scene->nodeItem(m_model.sourceNodeId)) {
+            if (PortGraphicsItem *port = source->portItem(m_model.sourcePortId)) {
+                bool ok = false;
+                const Selt::DataTypeId type = Selt::dataTypeIdFromString(port->port().dataType, &ok);
+                if (ok)
+                    lineColor = Selt::colorForDataType(type);
+            }
+        }
+    }
+
+    QPen pen(lineColor, 2.0);
     if (option->state & QStyle::State_Selected)
-        pen = QPen(QColor(255, 140, 0), 3.0, Qt::DashLine);
+        pen = QPen(Selt::UiStyle::connectionActive(), 3.0);
+    else if (m_relatedHighlight)
+        pen = QPen(Selt::UiStyle::connectionHover(), 2.6);
     painter->setPen(pen);
     painter->setBrush(Qt::NoBrush);
     painter->drawPath(path());
@@ -81,8 +107,21 @@ void ConnectionGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphics
 
     if (!m_model.label.isEmpty()) {
         const QPointF mid = path().pointAtPercent(0.5);
-        painter->setPen(QColor(40, 40, 40));
+        painter->setPen(Selt::UiStyle::textSecondary());
         painter->drawText(mid + QPointF(4, -4), m_model.label);
+    } else if (auto *scene = canvasScene()) {
+        if (NodeGraphicsItem *source = scene->nodeItem(m_model.sourceNodeId)) {
+            if (PortGraphicsItem *port = source->portItem(m_model.sourcePortId)) {
+                const QString shortName = port->port().name.isEmpty()
+                    ? port->port().id
+                    : port->port().name;
+                if (!shortName.isEmpty()) {
+                    const QPointF mid = path().pointAtPercent(0.5);
+                    painter->setPen(Selt::UiStyle::textSecondary());
+                    painter->drawText(mid + QPointF(4, -4), shortName.left(8));
+                }
+            }
+        }
     }
 }
 

@@ -10,6 +10,10 @@
 #define SELT_HAS_OPENCV 0
 #endif
 
+namespace Selt {
+class ProjectVariableStore;
+}
+
 class Document;
 class QUndoStack;
 class QLineEdit;
@@ -17,6 +21,10 @@ class QLabel;
 class QFormLayout;
 class QCheckBox;
 class QWidget;
+class QScrollArea;
+class QVBoxLayout;
+class QGroupBox;
+class BindingEditor;
 
 class PropertyPanel : public QWidget
 {
@@ -27,6 +35,7 @@ public:
 
     void setDocument(Document *document);
     void setUndoStack(QUndoStack *undoStack);
+    void setProjectVariables(const Selt::ProjectVariableStore *variables);
     void setSelectedNode(const QString &nodeId);
     void setModuleStatusText(const QString &text);
     void applyRoiParameter(const QString &key, const QJsonObject &roiJson);
@@ -60,15 +69,19 @@ private:
     void rebuildUi();
     void clearDynamicWidgets();
     void rebuildDynamicParameters(const NodeModel &node);
+    void applyParamFilter();
     void loadFromNode(const NodeModel &node);
     void blockSignalsRecursive(bool block);
     void updateRoiInfoLabel(const QString &key, const QJsonObject &roiJson);
     NodeModel currentNode() const;
     QJsonObject collectDynamicParameters() const;
+    QJsonObject collectParameterBindings() const;
     void pushNodeChange(const NodeModel &oldNode, const NodeModel &newNode);
+    void restoreConstantBinding(const QString &key);
 
     Document *m_document{nullptr};
     QUndoStack *m_undoStack{nullptr};
+    const Selt::ProjectVariableStore *m_variables{nullptr};
     QString m_nodeId;
     int m_applyingChanges{0};
 
@@ -79,9 +92,14 @@ private:
     QLineEdit *m_textEdit{nullptr};
     QCheckBox *m_lockedCheck{nullptr};
     QWidget *m_commonWidget{nullptr};
+    QLineEdit *m_paramFilterEdit{nullptr};
+    QCheckBox *m_boundOnlyCheck{nullptr};
+    QScrollArea *m_dynamicScroll{nullptr};
     QWidget *m_dynamicWidget{nullptr};
-    QFormLayout *m_dynamicForm{nullptr};
+    QVBoxLayout *m_dynamicLayout{nullptr};
     QHash<QString, QWidget *> m_paramWidgets;
+    QHash<QString, BindingEditor *> m_bindingEditors;
+    QHash<QString, QGroupBox *> m_paramGroups;
 };
 
 #endif // PROPERTYPANEL_H

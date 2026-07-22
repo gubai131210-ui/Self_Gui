@@ -37,16 +37,46 @@ QJsonObject NodeModel::toJson() const
     obj.insert(QStringLiteral("height"), size.height());
     obj.insert(QStringLiteral("style"), style.toJson());
     obj.insert(QStringLiteral("locked"), locked);
+    obj.insert(QStringLiteral("enabled"), enabled);
+    obj.insert(QStringLiteral("breakpoint"), breakpoint);
+    obj.insert(QStringLiteral("collapsed"), collapsed);
     obj.insert(QStringLiteral("zValue"), zValue);
     obj.insert(QStringLiteral("groupId"), groupId);
     if (!parameters.isEmpty())
         obj.insert(QStringLiteral("parameters"), parameters);
+    if (!parameterBindings.isEmpty())
+        obj.insert(QStringLiteral("parameterBindings"), parameterBindings);
+    if (portExposureCustomized || !exposedPortIds.isEmpty()) {
+        QJsonArray exposed;
+        for (const QString &id : exposedPortIds)
+            exposed.append(id);
+        obj.insert(QStringLiteral("exposedPortIds"), exposed);
+        obj.insert(QStringLiteral("portExposureCustomized"), portExposureCustomized);
+    }
 
     QJsonArray portsArray;
     for (const PortModel &port : ports)
         portsArray.append(port.toJson());
     obj.insert(QStringLiteral("ports"), portsArray);
     return obj;
+}
+
+const PortModel *NodeModel::findPort(const QString &portId) const
+{
+    for (const PortModel &port : ports) {
+        if (port.id == portId)
+            return &port;
+    }
+    return nullptr;
+}
+
+PortModel *NodeModel::findPort(const QString &portId)
+{
+    for (PortModel &port : ports) {
+        if (port.id == portId)
+            return &port;
+    }
+    return nullptr;
 }
 
 NodeModel NodeModel::fromJson(const QJsonObject &obj)
@@ -64,9 +94,17 @@ NodeModel NodeModel::fromJson(const QJsonObject &obj)
                        obj.value(QStringLiteral("height")).toDouble(70));
     node.style = NodeStyle::fromJson(obj.value(QStringLiteral("style")).toObject());
     node.locked = obj.value(QStringLiteral("locked")).toBool(false);
+    node.enabled = obj.value(QStringLiteral("enabled")).toBool(true);
+    node.breakpoint = obj.value(QStringLiteral("breakpoint")).toBool(false);
+    node.collapsed = obj.value(QStringLiteral("collapsed")).toBool(false);
     node.zValue = obj.value(QStringLiteral("zValue")).toInt(0);
     node.groupId = obj.value(QStringLiteral("groupId")).toString();
     node.parameters = obj.value(QStringLiteral("parameters")).toObject();
+    node.parameterBindings = obj.value(QStringLiteral("parameterBindings")).toObject();
+    node.portExposureCustomized = obj.value(QStringLiteral("portExposureCustomized")).toBool(false);
+    const QJsonArray exposedArray = obj.value(QStringLiteral("exposedPortIds")).toArray();
+    for (const QJsonValue &v : exposedArray)
+        node.exposedPortIds.append(v.toString());
 
     const QJsonArray portsArray = obj.value(QStringLiteral("ports")).toArray();
     if (portsArray.isEmpty()) {
